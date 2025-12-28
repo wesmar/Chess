@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release_MinSize|Win32"><Configuration>Release_MinSize</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release_MinSize|x64"><Configuration>Release_MinSize</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{E6F8D4A1-1234-5678-90AB-CDEF12345678}</ProjectGuid>
+    <RootNamespace>Chess</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <IntDir>obj\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir>$(Platform)\$(Configuration)\</OutDir>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)'=='Release' Or '$(Configuration)'=='Release_MinSize'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>Engine;UI;Resources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalOptions>/BREPRO %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comctl32.lib;comdlg32.lib;shell32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>powershell -Command "&amp; {$f='$(OutDir)$(TargetName)$(TargetExt)'; (Get-Item $f).CreationTime='2026-01-01 00:00:00'; (Get-Item $f).LastWriteTime='2026-01-01 00:00:00'}"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link><SubSystem>Windows</SubSystem></Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release_MinSize'">
+    <ClCompile>
+      <Optimization>MinSpace</Optimization>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+    </ClCompile>
+    <Link><SubSystem>Windows</SubSystem></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\main.cpp" />
+    <ClCompile Include="UI\ChessGame.cpp" />
+    <ClCompile Include="UI\VectorRenderer.cpp" />
+    <ClCompile Include="UI\WinApp.cpp" />
+    <ClCompile Include="Engine\Board.cpp" />
+    <ClCompile Include="Engine\MoveGenerator.cpp" />
+    <ClCompile Include="Engine\Zobrist.cpp" />
+    <ClCompile Include="Engine\Evaluation.cpp" />
+    <ClCompile Include="Engine\TranspositionTable.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\ChessGame.h" />
+    <ClInclude Include="UI\VectorRenderer.h" />
+    <ClInclude Include="UI\WinApp.h" />
+    <ClInclude Include="Engine\Board.h" />
+    <ClInclude Include="Engine\ChessConstants.h" />
+    <ClInclude Include="Engine\Move.h" />
+    <ClInclude Include="Engine\Piece.h" />
+    <ClInclude Include="Engine\Zobrist.h" />
+    <ClInclude Include="Engine\TranspositionTable.h" />
+    <ClInclude Include="Engine\Evaluation.h" />
+    <ClInclude Include="Engine\MoveGenerator.h" />
+    <ClInclude Include="Resources\Resource.h" />
+  </ItemGroup>
+  <ItemGroup><ResourceCompile Include="Resources\Chess.rc" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

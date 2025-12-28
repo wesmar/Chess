@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="UI"><UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier></Filter>
+    <Filter Include="Engine"><UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier></Filter>
+    <Filter Include="Resources"><UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="UI\main.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\ChessGame.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\VectorRenderer.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\WinApp.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="Engine\Board.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\MoveGenerator.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\Zobrist.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\Evaluation.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\TranspositionTable.cpp"><Filter>Engine</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="UI\ChessGame.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\VectorRenderer.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\WinApp.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="Engine\Board.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\ChessConstants.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Move.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Piece.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Zobrist.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\TranspositionTable.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Evaluation.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\MoveGenerator.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Resources\Resource.h"><Filter>Resources</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup><ResourceCompile Include="Resources\Chess.rc"><Filter>Resources</Filter></ResourceCompile></ItemGroup>
+</Project>
