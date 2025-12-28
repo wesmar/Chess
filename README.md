@@ -194,7 +194,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-This project was created during Christmas 2024/2025 as an educational chess engine. Special thanks to the chess programming community for their excellent resources:
+This project was created during Christmas 2025/2026 as an educational chess engine. Special thanks to the chess programming community for their excellent resources:
 - [Chess Programming Wiki](https://www.chessprogramming.org/)
 - [Bruce Moreland's Programming Topics](https://web.archive.org/web/20071026090003/http://www.brucemo.com/compchess/programming/index.htm)
 
