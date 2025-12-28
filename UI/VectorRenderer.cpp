@@ -108,9 +108,9 @@ namespace Chess
         
         RECT boardRect = {
             clientRect.left + (clientRect.right - clientRect.left - 300 - boardSize) / 2,
-            clientRect.top + (clientRect.bottom - clientRect.top - boardSize) / 2,
+            clientRect.top + (clientRect.bottom - clientRect.top - boardSize) / 2 - 20,
             clientRect.left + (clientRect.right - clientRect.left - 300 + boardSize) / 2,
-            clientRect.top + (clientRect.bottom - clientRect.top + boardSize) / 2
+            clientRect.top + (clientRect.bottom - clientRect.top + boardSize) / 2 - 20
         };
 
         // Draw background

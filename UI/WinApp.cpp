@@ -1015,7 +1015,7 @@ namespace Chess
         
         // Center board in available space
         int boardLeft = (clientRect.right - 300 - boardSize) / 2;
-        int boardTop = (clientRect.bottom - boardSize) / 2;
+        int boardTop = (clientRect.bottom - boardSize) / 2 - 20;
         
         return {
             boardLeft,
