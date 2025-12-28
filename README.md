@@ -1,5 +1,7 @@
 # ♔ Modern Chess Engine
 
+(Images/chess01.jpg)
+
 A lightweight, educational chess engine written in modern C++20 with pure WinAPI interface. Perfect for learning how chess engines work without diving through hundreds of thousands of lines of code.
 
 [![Windows](https://img.shields.io/badge/Windows-10%2B-blue.svg)](https://www.microsoft.com/windows)
