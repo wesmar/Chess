@@ -199,7 +199,8 @@ class GameSettingsDialog
             GameMode gameMode = GameMode::HumanVsComputer;
             DifficultyLevel aiDifficulty = 3;
             bool autoPromoteQueen = true;
-            
+            int numThreads = 4;
+
             // Appearance settings
             std::wstring language = L"English";
             COLORREF lightSquareColor = RGB(240, 240, 245);

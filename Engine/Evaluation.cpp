@@ -254,33 +254,43 @@ namespace Chess
 
     // ========== GAME PHASE DETECTION ==========
 
-    // Determine current game phase based on remaining pieces
-    enum class GamePhase { Opening, Middlegame, Endgame };
-
-    GamePhase GetGamePhase(const Board& board)
+    // Compute game phase as continuous value from 0 (endgame) to 256 (opening)
+    // Based on remaining material with weights: Q=4, R=2, B=1, N=1
+    int ComputePhase(const Board& board)
     {
-        int pieceCount = 0;
-        int queenCount = 0;
+        // Phase weights for non-pawn pieces
+        constexpr int QUEEN_PHASE = 4;
+        constexpr int ROOK_PHASE = 2;
+        constexpr int BISHOP_PHASE = 1;
+        constexpr int KNIGHT_PHASE = 1;
 
-        // Count non-pawn, non-king pieces
+        // Maximum phase value from starting position:
+        // 2 Queens * 4 + 4 Rooks * 2 + 4 Bishops * 1 + 4 Knights * 1 = 24
+        constexpr int TOTAL_PHASE = 24;
+
+        int phase = 0;
+
+        // Count material and accumulate phase value
         for (int sq = 0; sq < 64; ++sq)
         {
             Piece piece = board.GetPieceAt(sq);
-            if (!piece.IsEmpty() && piece.GetType() != PieceType::Pawn && piece.GetType() != PieceType::King)
+            if (piece.IsEmpty()) continue;
+
+            PieceType type = piece.GetType();
+
+            // Add phase contribution for non-pawn pieces
+            switch (type)
             {
-                pieceCount++;
-                if (piece.GetType() == PieceType::Queen)
-                    queenCount++;
+            case PieceType::Queen:  phase += QUEEN_PHASE; break;
+            case PieceType::Rook:   phase += ROOK_PHASE; break;
+            case PieceType::Bishop: phase += BISHOP_PHASE; break;
+            case PieceType::Knight: phase += KNIGHT_PHASE; break;
+            default: break;
             }
         }
 
-        // Classify game phase based on remaining material
-        if (pieceCount <= 6 || queenCount == 0)
-            return GamePhase::Endgame;
-        else if (pieceCount <= 12)
-            return GamePhase::Middlegame;
-        else
-            return GamePhase::Opening;
+        // Map phase to 0..256 scale (256 = opening, 0 = endgame)
+        return (phase * 256 + (TOTAL_PHASE / 2)) / TOTAL_PHASE;
     }
 
     // Evaluate pawn structure quality (penalizes weaknesses)
@@ -332,15 +342,16 @@ namespace Chess
 
     // Complete position evaluation combining multiple factors
     // Returns score from side-to-move perspective (positive = advantage)
+    // Uses tapered evaluation to smoothly blend middlegame and endgame scores
     int Evaluate(const Board& board)
     {
-        int score = 0;
+        int mgScore = 0;  // Middlegame score
+        int egScore = 0;  // Endgame score
         int whiteBishops = 0;
         int blackBishops = 0;
-        int whiteMaterial = 0;
-        int blackMaterial = 0;
 
-        GamePhase phase = GetGamePhase(board);
+        // Compute game phase (256 = opening/middlegame, 0 = endgame)
+        int phase = ComputePhase(board);
 
         // 1. MATERIAL AND PIECE-SQUARE TABLES
         for (int sq = 0; sq < 64; ++sq)
@@ -352,11 +363,16 @@ namespace Chess
             PlayerColor color = piece.GetColor();
 
             int value = GetPieceValue(type);
-            int pstValue = 0;
 
-            // Use endgame king table when appropriate
-            if (type == PieceType::King && phase == GamePhase::Endgame)
+            // Get PST values for middlegame and endgame
+            int mgPST = GetPSTValue(type, sq, color);
+            int egPST = mgPST;  // Most pieces use same PST for both phases
+
+            // King uses different tables for middlegame vs endgame
+            if (type == PieceType::King)
             {
+                // mgPST already set by GetPSTValue (uses KING_PST)
+                // Now get endgame PST value
                 int sq_adjusted = sq;
                 if (color == PlayerColor::White)
                 {
@@ -364,61 +380,70 @@ namespace Chess
                     int rank = sq / 8;
                     sq_adjusted = (7 - rank) * 8 + file;
                 }
-                pstValue = KING_ENDGAME_PST[sq_adjusted];
-            }
-            else
-            {
-                pstValue = GetPSTValue(type, sq, color);
+                egPST = KING_ENDGAME_PST[sq_adjusted];
             }
 
-            int pieceScore = value + pstValue;
+            // Add material and positional value to both scores
+            int mgPieceScore = value + mgPST;
+            int egPieceScore = value + egPST;
 
-            // Add to respective side's score and track material/bishops
             if (color == PlayerColor::White)
             {
-                whiteMaterial += value;
-                score += pieceScore;
+                mgScore += mgPieceScore;
+                egScore += egPieceScore;
                 if (type == PieceType::Bishop) whiteBishops++;
             }
             else
             {
-                blackMaterial += value;
-                score -= pieceScore;
+                mgScore -= mgPieceScore;
+                egScore -= egPieceScore;
                 if (type == PieceType::Bishop) blackBishops++;
             }
         }
 
         // 2. BISHOP PAIR BONUS
         // Having both bishops gives significant advantage in open positions
-        if (whiteBishops >= 2) score += 40;
-        if (blackBishops >= 2) score -= 40;
-
-        // 3. KING SAFETY (only in opening and middlegame)
-        // In endgame, active king is more important than safety
-        if (phase != GamePhase::Endgame)
+        if (whiteBishops >= 2)
         {
-            score += EvaluateKingSafety(board, PlayerColor::White);
-            score -= EvaluateKingSafety(board, PlayerColor::Black);
+            mgScore += 40;
+            egScore += 40;
+        }
+        if (blackBishops >= 2)
+        {
+            mgScore -= 40;
+            egScore -= 40;
         }
 
-        // 4. MOBILITY (less important in opening)
-        // Pieces with more available moves are generally better positioned
-        if (phase != GamePhase::Opening)
-        {
-            score += EvaluateMobility(board);
-        }
+        // 3. KING SAFETY
+        // Only relevant in middlegame; fades out automatically with phase
+        int kingSafety = EvaluateKingSafety(board, PlayerColor::White) -
+                         EvaluateKingSafety(board, PlayerColor::Black);
+        mgScore += kingSafety;  // Add to middlegame only
+        // egScore += 0;  // Not added to endgame (king safety irrelevant)
+
+        // 4. MOBILITY
+        // Important in middlegame, less so in endgame
+        int mobility = EvaluateMobility(board);
+        mgScore += mobility;      // Full weight in middlegame
+        egScore += mobility / 2;  // Half weight in endgame
 
         // 5. PAWN STRUCTURE
         // Penalize weak pawn formations (doubled, isolated)
-        score += EvaluatePawnStructure(board, PlayerColor::White);
-        score -= EvaluatePawnStructure(board, PlayerColor::Black);
+        int pawnStructure = EvaluatePawnStructure(board, PlayerColor::White) -
+                            EvaluatePawnStructure(board, PlayerColor::Black);
+        mgScore += pawnStructure;
+        egScore += pawnStructure;
 
         // 6. TEMPO BONUS
         // Small bonus for side to move (having the initiative)
-        if (board.GetSideToMove() == PlayerColor::White)
-            score += 10;
-        else
-            score -= 10;
+        int tempo = (board.GetSideToMove() == PlayerColor::White) ? 10 : -10;
+        mgScore += tempo;
+        egScore += tempo;
+
+        // 7. TAPERED EVALUATION
+        // Smoothly blend middlegame and endgame scores based on phase
+        // phase=256 (opening) → use mgScore, phase=0 (endgame) → use egScore
+        int score = (mgScore * phase + egScore * (256 - phase)) / 256;
 
         // Return score from side-to-move perspective
         return (board.GetSideToMove() == PlayerColor::White) ? score : -score;

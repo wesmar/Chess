@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <optional>
+#include <atomic>
 
 namespace Chess
 {
@@ -45,6 +46,8 @@ namespace Chess
         void SetDifficulty(DifficultyLevel difficulty);
         DifficultyLevel GetDifficulty() const { return m_difficulty; }
 
+        void SetThreads(int threads);
+
     private:
         DifficultyLevel m_difficulty;
         std::chrono::steady_clock::time_point m_searchStartTime;
@@ -56,6 +59,9 @@ namespace Chess
         Move m_killerMoves[MAX_PLY][2]; // Killer move heuristic
         int m_history[2][64][64]; // History heuristic: separate tables for each side to move
 
+        int m_numThreads = 1;
+        std::atomic<bool> m_abortSearch{false};
+
         // Search algorithms
         int AlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
         int QuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
@@ -65,6 +71,11 @@ namespace Chess
         // Move ordering for better pruning
         void OrderMoves(std::vector<Move>& moves, const Board& board, Move ttMove, int ply);
         int ScoreMove(const Move& move, const Board& board, Move ttMove, int ply);
+
+        void HelperSearch(Board board, int depth);
+        int HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
+        int HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
+        void OrderMovesSimple(std::vector<Move>& moves, const Board& board, Move ttMove);
     };
 
     // PGN game record structure

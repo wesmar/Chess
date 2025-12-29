@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include "ChessGame.h"
 #include "../Engine/Evaluation.h"
+#include "../Engine/OpeningBook.h"
 #include <algorithm>
 #include <random>
 #include <chrono>
@@ -70,6 +71,20 @@ namespace Chess
         else
         {
             m_transpositionTable.Resize(64);
+        }
+
+        // Configure thread count based on difficulty
+        if (m_difficulty >= 6) {
+            m_numThreads = std::thread::hardware_concurrency();
+            if (m_numThreads < 1) m_numThreads = 4; // Fallback
+        } else {
+            m_numThreads = 1;
+        }
+    }
+
+    void AIPlayer::SetThreads(int threads) {
+        if (threads >= 1 && threads <= 64) {
+            m_numThreads = threads;
         }
     }
 
@@ -146,6 +161,7 @@ namespace Chess
     // Main search function - find best move using iterative deepening
     Move AIPlayer::CalculateBestMove(const Board& board, int maxTimeMs)
     {
+        m_abortSearch.store(false);
         m_searchStartTime = std::chrono::steady_clock::now();
         m_maxSearchTimeMs = maxTimeMs;
 
@@ -178,6 +194,27 @@ namespace Chess
         {
             return Move(); // No legal moves available
         }
+
+        // Try opening book first (difficulty 3+, early game only)
+        if (m_difficulty >= 3)
+        {
+            // Estimate ply count from starting position (rough heuristic)
+            int piecesOnBoard = 0;
+            for (int sq = 0; sq < 64; ++sq)
+            {
+                if (!board.GetPieceAt(sq).IsEmpty())
+                    piecesOnBoard++;
+            }
+            int estimatedPly = (32 - piecesOnBoard) * 2; // Rough estimate
+
+            auto bookMove = ProbeBook(board, estimatedPly);
+            if (bookMove.has_value())
+            {
+                return bookMove.value();
+            }
+        }
+
+        const int MAX_DEPTH = 30;
 
         // Level 1: Pure random move selection
         if (m_difficulty == 1)
@@ -222,7 +259,15 @@ namespace Chess
 
         Move bestMoveSoFar = legalMoves[0];  // Safe fallback
 
-        const int MAX_DEPTH = 30;
+        // Launch helper threads if multi-threading enabled
+        std::vector<std::future<void>> helpers;
+        if (m_numThreads > 1 && m_difficulty >= 6) {
+            for (int i = 1; i < m_numThreads; ++i) {
+                int helperDepth = MAX_DEPTH + (i % 2); // Diversify search depth
+                helpers.push_back(std::async(std::launch::async,
+                    &AIPlayer::HelperSearch, this, searchBoard, helperDepth));
+            }
+        }
 
         // Iterative deepening loop - gradually increase search depth
         for (int depth = 1; depth <= MAX_DEPTH; ++depth)
@@ -258,6 +303,12 @@ namespace Chess
                     }
                 }
             }
+        }
+
+        // Stop helper threads
+        m_abortSearch.store(true);
+        for (auto& f : helpers) {
+            if (f.valid()) f.wait();
         }
 
         return bestMoveSoFar;
@@ -494,6 +545,275 @@ namespace Chess
         }
 
         return alpha;
+    }
+
+    void AIPlayer::OrderMovesSimple(std::vector<Move>& moves, const Board& board, Move ttMove)
+    {
+        std::vector<std::pair<int, Move>> scoredMoves;
+
+        for (const auto& move : moves)
+        {
+            int score = 0;
+
+            // Highest priority: TT move
+            if (move == ttMove)
+            {
+                score = 10000000;
+            }
+            // High priority: Captures using MVV-LVA
+            else if (move.IsCapture())
+            {
+                Piece victim = move.GetCaptured();
+                Piece aggressor = board.GetPieceAt(move.GetFrom());
+                int victimValue = PIECE_VALUES[static_cast<int>(victim.GetType())];
+                int aggressorValue = PIECE_VALUES[static_cast<int>(aggressor.GetType())];
+                score = 1000000 + victimValue * 10 - aggressorValue;
+            }
+            // Good priority: Promotions
+            else if (move.IsPromotion())
+            {
+                score = 900000;
+            }
+
+            scoredMoves.push_back({score, move});
+        }
+
+        std::sort(scoredMoves.begin(), scoredMoves.end(),
+            [](const auto& a, const auto& b) { return a.first > b.first; });
+
+        moves.clear();
+        for (const auto& [score, move] : scoredMoves)
+        {
+            moves.push_back(move);
+        }
+    }
+
+    int AIPlayer::HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply)
+    {
+        if (m_abortSearch.load()) return 0;
+
+        uint64_t zobristKey = board.GetZobristKey();
+        Move ttMove;
+        int ttScore;
+        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove))
+        {
+            return ttScore;
+        }
+
+        if (depth == 0)
+        {
+            return HelperQuiescenceSearch(board, alpha, beta, ply, 0);
+        }
+
+        auto moves = board.GenerateLegalMoves();
+        if (moves.empty())
+        {
+            if (board.IsInCheck(board.GetCurrentPlayer()))
+            {
+                return -MATE_SCORE + ply;
+            }
+            return 0;
+        }
+
+        if (depth >= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
+        {
+            const int R = 2;
+            board.MakeNullMoveUnchecked();
+            int score = -HelperAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
+            board.UndoNullMove();
+
+            if (score >= beta)
+            {
+                return beta;
+            }
+        }
+
+        OrderMovesSimple(moves, board, ttMove);
+
+        Move bestMove;
+        int bestScore = -INFINITY_SCORE;
+        uint8_t flag = TT_ALPHA;
+
+        bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+        int moveIndex = 0;
+
+        for (const auto& move : moves)
+        {
+            board.MakeMoveUnchecked(move);
+
+            int score;
+
+            bool isQuiet = !move.IsCapture() &&
+                           !move.IsPromotion() &&
+                           !move.IsEnPassant() &&
+                           !move.IsCastling();
+
+            bool applyLMR = depth >= 3 &&
+                            moveIndex >= 4 &&
+                            !sideInCheck &&
+                            isQuiet;
+
+            if (applyLMR)
+            {
+                score = -HelperAlphaBeta(board, depth - 2, -beta, -alpha, ply + 1);
+
+                if (score > alpha)
+                {
+                    score = -HelperAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
+                }
+            }
+            else
+            {
+                score = -HelperAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
+            }
+
+            board.UndoMove();
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestMove = move;
+            }
+
+            if (score >= beta)
+            {
+                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove);
+                return beta;
+            }
+
+            if (score > alpha)
+            {
+                alpha = score;
+                flag = TT_EXACT;
+            }
+
+            moveIndex++;
+        }
+
+        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove);
+        return bestScore;
+    }
+
+    int AIPlayer::HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth)
+    {
+        if (m_abortSearch.load() || qDepth >= 8)
+        {
+            return Evaluate(board);
+        }
+
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+
+        if (board.IsInCheck(sideToMove))
+        {
+            auto evasions = board.GenerateLegalMoves();
+            if (evasions.empty())
+            {
+                return -MATE_SCORE + ply;
+            }
+
+            OrderMovesSimple(evasions, board, Move());
+
+            int best = -INFINITY_SCORE;
+
+            for (const auto& move : evasions)
+            {
+                board.MakeMoveUnchecked(move);
+
+                int score = -HelperQuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
+
+                board.UndoMove();
+
+                if (score > best) best = score;
+
+                if (score >= beta)
+                {
+                    return beta;
+                }
+                if (score > alpha)
+                {
+                    alpha = score;
+                }
+            }
+
+            return alpha;
+        }
+
+        int standPat = Evaluate(board);
+
+        if (standPat >= beta)
+        {
+            return beta;
+        }
+
+        if (standPat > alpha)
+        {
+            alpha = standPat;
+        }
+
+        auto moves = board.GenerateLegalMoves();
+        std::vector<Move> tacticalMoves;
+        tacticalMoves.reserve(moves.size());
+
+        for (const auto& move : moves)
+        {
+            if (move.IsCapture() || move.IsPromotion())
+            {
+                tacticalMoves.push_back(move);
+            }
+        }
+
+        OrderMovesSimple(tacticalMoves, board, Move());
+
+        for (const auto& move : tacticalMoves)
+        {
+            board.MakeMoveUnchecked(move);
+
+            int score = -HelperQuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
+
+            board.UndoMove();
+
+            if (score >= beta)
+            {
+                return beta;
+            }
+            if (score > alpha)
+            {
+                alpha = score;
+            }
+        }
+
+        return alpha;
+    }
+
+    void AIPlayer::HelperSearch(Board board, int maxDepth) {
+        for (int depth = 1; depth <= maxDepth; ++depth) {
+            if (m_abortSearch.load()) return;
+
+            auto moves = board.GenerateLegalMoves();
+            if (moves.empty()) return;
+
+            OrderMovesSimple(moves, board, Move());
+
+            for (size_t i = 0; i < moves.size(); ++i) {
+                if (m_abortSearch.load()) return;
+
+                const Move& move = moves[i];
+                board.MakeMoveUnchecked(move);
+
+                int reduction = 0;
+                if (i >= 4 && depth >= 3 &&
+                    !move.IsCapture() &&
+                    !move.IsPromotion() &&
+                    !board.IsInCheck(board.GetCurrentPlayer())) {
+                    reduction = 1;
+                }
+
+                int score = -HelperAlphaBeta(board, depth - 1 - reduction,
+                                      -INFINITY_SCORE, INFINITY_SCORE, 1);
+
+                board.UndoMove();
+            }
+        }
     }
 
     // ---------- ChessGame Implementation ----------

@@ -44,10 +44,10 @@ Most chess engines are either too simple (lacking modern techniques) or too comp
 
 ### Download
 Grab the latest release from [Releases](https://github.com/wesmar/Chess/releases):
-- `Chess_x64.exe` - 64-bit version (~480 KB)
-- `Chess_x64_minSize.exe` - 64-bit minimal (~170 KB)
-- `Chess_x86.exe` - 32-bit version (~400 KB)
-- `Chess_x86_minSize.exe` - 32-bit minimal (~140 KB)
+- `Chess_x64.exe` - 64-bit version (~500 KB)
+- `Chess_x64_minSize.exe` - 64-bit minimal (~200 KB)
+- `Chess_x86.exe` - 32-bit version (~450 KB)
+- `Chess_x86_minSize.exe` - 32-bit minimal (~160 KB)
 
 Just download and run - no installation needed!
 

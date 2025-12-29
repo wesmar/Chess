@@ -13,6 +13,7 @@ namespace Chess
     // Resize transposition table to specified size in megabytes
     void TranspositionTable::Resize(size_t sizeInMB)
     {
+        std::lock_guard<std::mutex> lock(m_mutex);
         size_t numEntries = (sizeInMB * 1024 * 1024) / sizeof(TTEntry);
 
         // Round down to nearest power of 2 for efficient indexing
@@ -24,12 +25,20 @@ namespace Chess
 
         m_size = powerOf2;
         m_entries.resize(m_size);
-        Clear();
+        for (auto& entry : m_entries)
+        {
+            entry.key = 0;
+            entry.score = 0;
+            entry.depth = 0;
+            entry.flag = TT_EXACT;
+            entry.bestMove = Move();
+        }
     }
 
     // Clear all entries in the transposition table
     void TranspositionTable::Clear()
     {
+        std::lock_guard<std::mutex> lock(m_mutex);
         for (auto& entry : m_entries)
         {
             entry.key = 0;
@@ -43,6 +52,7 @@ namespace Chess
     // Probe transposition table for cached position evaluation
     bool TranspositionTable::Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove)
     {
+        std::lock_guard<std::mutex> lock(m_mutex);
         size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
         TTEntry& entry = m_entries[index];
 
@@ -83,6 +93,7 @@ namespace Chess
     // Store position evaluation in transposition table
     void TranspositionTable::Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove)
     {
+        std::lock_guard<std::mutex> lock(m_mutex);
         size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
         TTEntry& entry = m_entries[index];
 

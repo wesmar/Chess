@@ -4,6 +4,7 @@
 #include "Move.h"
 #include <cstdint>
 #include <vector>
+#include <mutex>
 
 namespace Chess
 {
@@ -46,5 +47,6 @@ namespace Chess
     private:
         std::vector<TTEntry> m_entries;
         size_t m_size;
+        mutable std::mutex m_mutex;
     };
 }

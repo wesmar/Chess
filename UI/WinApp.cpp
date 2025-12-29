@@ -89,7 +89,12 @@ namespace Chess
 		
 		// Start update timer for animations and AI processing
 		m_timerId = SetTimer(m_hwnd, 1, TIMER_INTERVAL, nullptr);
-		
+
+		// Configure AI thread count from settings
+		GameSettingsDialog::Settings settings;
+		GameSettingsDialog::LoadFromINI(settings);
+		m_game.GetCurrentAIPlayer()->SetThreads(settings.numThreads);
+
 		// Initialize game with correct mode after window is ready
 		m_game.SetGameMode(m_currentGameMode);
 		m_game.NewGame(m_currentGameMode);
@@ -1382,6 +1387,11 @@ namespace Chess
 		m_currentDifficulty = difficulty;
 		m_game.SetAIDifficulty(PlayerColor::White, difficulty);
 		m_game.SetAIDifficulty(PlayerColor::Black, difficulty);
+
+		// Reload thread count from settings to respect user configuration
+		GameSettingsDialog::Settings settings;
+		GameSettingsDialog::LoadFromINI(settings);
+		m_game.GetCurrentAIPlayer()->SetThreads(settings.numThreads);
 	}
 
     void MainWindow::SaveGame()
@@ -2082,8 +2092,12 @@ bool GameSettingsDialog::ApplySettings(HWND hwnd, Settings* settings)
 		int gameMode = GetPrivateProfileInt(L"Game", L"GameMode", 1, iniPath.c_str());
 		settings.gameMode = static_cast<GameMode>(gameMode);
 		settings.aiDifficulty = GetPrivateProfileInt(L"Game", L"AIDifficulty", 3, iniPath.c_str());
+		settings.numThreads = GetPrivateProfileInt(L"Game", L"Threads",
+		    std::thread::hardware_concurrency(), iniPath.c_str());
+		if (settings.numThreads < 1) settings.numThreads = 1;
+		if (settings.numThreads > 64) settings.numThreads = 64;
 		settings.autoPromoteQueen = GetPrivateProfileInt(L"Game", L"AutoPromoteQueen", 1, iniPath.c_str()) != 0;
-		
+
 		// Load appearance settings from INI
 		wchar_t langBuffer[64] = {};
 		GetPrivateProfileString(L"Display", L"Language", L"English", langBuffer, 64, iniPath.c_str());
@@ -2139,8 +2153,10 @@ bool GameSettingsDialog::ApplySettings(HWND hwnd, Settings* settings)
 		// Save game settings to INI
 		WritePrivateProfileString(L"Game", L"GameMode", std::to_wstring(static_cast<int>(settings.gameMode)).c_str(), iniPath.c_str());
 		WritePrivateProfileString(L"Game", L"AIDifficulty", std::to_wstring(settings.aiDifficulty).c_str(), iniPath.c_str());
+		WritePrivateProfileString(L"Game", L"Threads",
+		    std::to_wstring(settings.numThreads).c_str(), iniPath.c_str());
 		WritePrivateProfileString(L"Game", L"AutoPromoteQueen", settings.autoPromoteQueen ? L"1" : L"0", iniPath.c_str());
-		
+
 		// Save appearance settings to INI
 		WritePrivateProfileString(L"Display", L"Language", settings.language.c_str(), iniPath.c_str());
 		WritePrivateProfileString(L"Display", L"ShowPieceShadows", settings.showPieceShadows ? L"1" : L"0", iniPath.c_str());

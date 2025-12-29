@@ -58,6 +58,7 @@
     <ClCompile Include="UI\WinApp.cpp" />
     <ClCompile Include="Engine\Board.cpp" />
     <ClCompile Include="Engine\MoveGenerator.cpp" />
+	<ClCompile Include="Engine\OpeningBook.cpp" />
     <ClCompile Include="Engine\Zobrist.cpp" />
     <ClCompile Include="Engine\Evaluation.cpp" />
     <ClCompile Include="Engine\TranspositionTable.cpp" />
@@ -67,6 +68,7 @@
     <ClInclude Include="UI\VectorRenderer.h" />
     <ClInclude Include="UI\WinApp.h" />
     <ClInclude Include="Engine\Board.h" />
+    <ClInclude Include="Engine\OpeningBook.h" />
     <ClInclude Include="Engine\ChessConstants.h" />
     <ClInclude Include="Engine\Move.h" />
     <ClInclude Include="Engine\Piece.h" />

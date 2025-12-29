@@ -11,6 +11,7 @@
     <ClCompile Include="UI\VectorRenderer.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\WinApp.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="Engine\Board.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\OpeningBook.cpp"><Filter>Engine</Filter></ClCompile>	
     <ClCompile Include="Engine\MoveGenerator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\Zobrist.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\Evaluation.cpp"><Filter>Engine</Filter></ClCompile>
@@ -22,6 +23,7 @@
     <ClInclude Include="UI\WinApp.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Engine\Board.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\ChessConstants.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\OpeningBook.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\Move.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\Piece.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\Zobrist.h"><Filter>Engine</Filter></ClInclude>
