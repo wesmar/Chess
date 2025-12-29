@@ -219,23 +219,37 @@ namespace Chess
     // Evaluate piece mobility - more available moves means better position
     int EvaluateMobility(const Board& board)
     {
-        // Generate pseudo-legal moves for speed (faster than full legal moves)
-        auto whiteMoves = MoveGenerator::GeneratePseudoLegalMoves(
-            board.GetPieces(), 
-            PlayerColor::White, 
-            board.GetEnPassantSquare(), 
-            nullptr
-        );
+        // Mobility: count only sliding piece moves (bishop/rook/queen)
+        // Knights are intentionally ignored to avoid overvaluing them in closed positions
 
-        auto blackMoves = MoveGenerator::GeneratePseudoLegalMoves(
-            board.GetPieces(), 
-            PlayerColor::Black, 
-            board.GetEnPassantSquare(), 
-            nullptr
-        );
+        auto countSlidingMovesFor = [&](PlayerColor color) -> int
+        {
+            auto moves = MoveGenerator::GeneratePseudoLegalMoves(
+                board.GetPieces(),
+                color,
+                board.GetEnPassantSquare(),
+                nullptr
+            );
 
-        // Return mobility difference (scaled down to balance with other factors)
-        return (static_cast<int>(whiteMoves.size()) - static_cast<int>(blackMoves.size())) * 2;
+            int mobility = 0;
+            for (const auto& move : moves)
+            {
+                Piece piece = board.GetPieceAt(move.GetFrom());
+                const PieceType type = piece.GetType();
+
+                if (type == PieceType::Bishop || type == PieceType::Rook || type == PieceType::Queen)
+                {
+                    mobility++;
+                }
+            }
+
+            return mobility;
+        };
+
+        const int whiteMobility = countSlidingMovesFor(PlayerColor::White);
+        const int blackMobility = countSlidingMovesFor(PlayerColor::Black);
+
+        return (whiteMobility - blackMobility);
     }
 
     // ========== GAME PHASE DETECTION ==========

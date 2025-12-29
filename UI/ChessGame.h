@@ -54,6 +54,7 @@ namespace Chess
 
         static constexpr int MAX_PLY = 64;
         Move m_killerMoves[MAX_PLY][2]; // Killer move heuristic
+        int m_history[2][64][64]; // History heuristic: separate tables for each side to move
 
         // Search algorithms
         int AlphaBeta(Board& board, int depth, int alpha, int beta, int ply);

@@ -41,6 +41,18 @@ namespace Chess
             m_killerMoves[i][0] = Move();
             m_killerMoves[i][1] = Move();
         }
+
+        // Initialize history heuristic tables (separate per side)
+        for (int side = 0; side < 2; ++side)
+        {
+            for (int from = 0; from < 64; ++from)
+            {
+                for (int to = 0; to < 64; ++to)
+                {
+                    m_history[side][from][to] = 0;
+                }
+            }
+        }
     }
 
     // Update AI difficulty and resize transposition table accordingly
@@ -92,8 +104,10 @@ namespace Chess
         if (move == m_killerMoves[ply][0]) return 800000;
         if (move == m_killerMoves[ply][1]) return 700000;
 
-        // Other moves get neutral score
-        return 0;
+        // History heuristic: use table for the side that is making the move
+        const Piece movingPiece = board.GetPieceAt(move.GetFrom());
+        const int sideIndex = static_cast<int>(movingPiece.GetColor());
+        return m_history[sideIndex][move.GetFrom()][move.GetTo()];
     }
 
     // Sort moves by score for better alpha-beta pruning efficiency
@@ -194,6 +208,18 @@ namespace Chess
             m_killerMoves[i][1] = Move();
         }
 
+        // Clear history heuristic tables (separate per side)
+        for (int side = 0; side < 2; ++side)
+        {
+            for (int from = 0; from < 64; ++from)
+            {
+                for (int to = 0; to < 64; ++to)
+                {
+                    m_history[side][from][to] = 0;
+                }
+            }
+        }
+
         Move bestMoveSoFar = legalMoves[0];  // Safe fallback
 
         const int MAX_DEPTH = 30;
@@ -270,19 +296,67 @@ namespace Chess
             return 0; // Stalemate
         }
 
+        // Null move pruning
+        if (depth >= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
+        {
+            const int R = 2;
+            board.MakeNullMoveUnchecked();
+            int score = -AlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
+            board.UndoNullMove();
+
+            if (score >= beta)
+            {
+                return beta;
+            }
+        }
+
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+        const int sideIndex = static_cast<int>(sideToMove);
+
         OrderMoves(moves, board, ttMove, ply);
 
         Move bestMove;
         int bestScore = -INFINITY_SCORE;
         uint8_t flag = TT_ALPHA;
 
+        bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+        int moveIndex = 0;
+
         // Search all legal moves
         for (const auto& move : moves)
         {
             board.MakeMoveUnchecked(move);
 
-            // Negamax recursion
-            int score = -AlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
+            int score;
+
+            // Check if move is quiet (not tactical)
+            bool isQuiet = !move.IsCapture() &&
+                           !move.IsPromotion() &&
+                           !move.IsEnPassant() &&
+                           !move.IsCastling();
+
+            // Check if we should apply late move reduction
+            bool applyLMR = depth >= 3 &&
+                            moveIndex >= 4 &&
+                            !sideInCheck &&
+                            isQuiet;
+
+            if (applyLMR)
+            {
+                // Search with reduced depth
+                score = -AlphaBeta(board, depth - 2, -beta, -alpha, ply + 1);
+
+                // If reduced search beat alpha, re-search at full depth
+                if (score > alpha)
+                {
+                    score = -AlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
+                }
+            }
+            else
+            {
+                // Normal full depth search
+                score = -AlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
+            }
 
             board.UndoMove();
 
@@ -295,11 +369,18 @@ namespace Chess
             // Beta cutoff - this move is too good, opponent won't allow it
             if (score >= beta)
             {
-                // Store killer move for non-captures
-                if (!move.IsCapture() && ply < MAX_PLY)
+                // Update history and killer moves for quiet moves
+                if (isQuiet)
                 {
-                    m_killerMoves[ply][1] = m_killerMoves[ply][0];
-                    m_killerMoves[ply][0] = move;
+                    // Update history heuristic (side-specific table)
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
+
+                    // Store killer move
+                    if (ply < MAX_PLY)
+                    {
+                        m_killerMoves[ply][1] = m_killerMoves[ply][0];
+                        m_killerMoves[ply][0] = move;
+                    }
                 }
                 m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove);
                 return beta;
@@ -311,6 +392,8 @@ namespace Chess
                 alpha = score;
                 flag = TT_EXACT;
             }
+
+            moveIndex++;
         }
 
         m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove);
@@ -326,34 +409,73 @@ namespace Chess
             return Evaluate(board);
         }
 
-        // Stand-pat evaluation - can we already beat beta without searching?
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+
+        // If in check, we must search all evasions (stand-pat is illegal in check)
+        if (board.IsInCheck(sideToMove))
+        {
+            auto evasions = board.GenerateLegalMoves();
+            if (evasions.empty())
+            {
+                return -MATE_SCORE + ply; // Checkmated
+            }
+
+            OrderMoves(evasions, board, Move(), ply);
+
+            int best = -INFINITY_SCORE;
+
+            for (const auto& move : evasions)
+            {
+                board.MakeMoveUnchecked(move);
+
+                int score = -QuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
+
+                board.UndoMove();
+
+                if (score > best) best = score;
+
+                if (score >= beta)
+                {
+                    return beta; // Beta cutoff
+                }
+                if (score > alpha)
+                {
+                    alpha = score; // Alpha improvement
+                }
+            }
+
+            return alpha;
+        }
+
+        // Not in check: normal stand-pat logic
         int standPat = Evaluate(board);
 
         if (standPat >= beta)
         {
-            return beta; // Beta cutoff
+            return beta;
         }
 
         if (standPat > alpha)
         {
-            alpha = standPat; // Alpha improvement
+            alpha = standPat;
         }
 
-        // Generate only capture and promotion moves
+        // Generate only tactical moves (captures/promotions)
         auto moves = board.GenerateLegalMoves();
-        std::vector<Move> captureMoves;
+        std::vector<Move> tacticalMoves;
+        tacticalMoves.reserve(moves.size());
+
         for (const auto& move : moves)
         {
             if (move.IsCapture() || move.IsPromotion())
             {
-                captureMoves.push_back(move);
+                tacticalMoves.push_back(move);
             }
         }
 
-        OrderMoves(captureMoves, board, Move(), ply);
+        OrderMoves(tacticalMoves, board, Move(), ply);
 
-        // Search tactical moves
-        for (const auto& move : captureMoves)
+        for (const auto& move : tacticalMoves)
         {
             board.MakeMoveUnchecked(move);
 
@@ -363,11 +485,11 @@ namespace Chess
 
             if (score >= beta)
             {
-                return beta; // Beta cutoff
+                return beta;
             }
             if (score > alpha)
             {
-                alpha = score; // Alpha improvement
+                alpha = score;
             }
         }
 

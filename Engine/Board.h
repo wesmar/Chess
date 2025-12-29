@@ -88,6 +88,9 @@ namespace Chess
         bool MakeMove(const Move& move);
         bool MakeMoveUnchecked(const Move& move);
         bool UndoMove();
+
+        bool MakeNullMoveUnchecked();
+        bool UndoNullMove();
         
         // ---------- Game State Queries ----------
         [[nodiscard]] GameState GetGameState() const;
@@ -151,8 +154,17 @@ namespace Chess
             int previousKingSquares[2] = {-1, -1};
             uint64_t previousZobristKey = 0;
         };
-        
+
         std::vector<MoveRecord> m_moveHistory;
+
+        // Null move undo information
+        struct NullMoveRecord
+        {
+            int previousEnPassant = -1;
+            uint64_t previousZobristKey = 0;
+        };
+
+        std::vector<NullMoveRecord> m_nullMoveHistory;
     };
 
     // ---------- Standard Positions ----------

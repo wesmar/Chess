@@ -387,6 +387,56 @@ namespace Chess
         return true;
     }
 
+    // Execute null move (pass turn to opponent without moving)
+    bool Board::MakeNullMoveUnchecked()
+    {
+        NullMoveRecord record;
+        record.previousEnPassant = m_enPassantSquare;
+        record.previousZobristKey = m_zobristKey;
+
+        // Remove old en passant from hash
+        if (m_enPassantSquare >= 0)
+        {
+            int oldEpFile = m_enPassantSquare % 8;
+            m_zobristKey ^= Zobrist::enPassantKeys[oldEpFile];
+            m_enPassantSquare = -1;
+        }
+
+        // Toggle side to move in Zobrist hash
+        m_zobristKey ^= Zobrist::sideToMoveKey;
+
+        // Switch active player
+        m_sideToMove = (m_sideToMove == PlayerColor::White)
+            ? PlayerColor::Black
+            : PlayerColor::White;
+
+        m_nullMoveHistory.push_back(record);
+        return true;
+    }
+
+    // Undo null move and restore previous board state
+    bool Board::UndoNullMove()
+    {
+        if (m_nullMoveHistory.empty())
+        {
+            return false;
+        }
+
+        NullMoveRecord record = m_nullMoveHistory.back();
+        m_nullMoveHistory.pop_back();
+
+        // Restore side to move
+        m_sideToMove = (m_sideToMove == PlayerColor::White)
+            ? PlayerColor::Black
+            : PlayerColor::White;
+
+        // Restore en passant and Zobrist key
+        m_enPassantSquare = record.previousEnPassant;
+        m_zobristKey = record.previousZobristKey;
+
+        return true;
+    }
+
 	// Count how many times current position has occurred (for threefold repetition)
 	int Board::CountRepetitions() const
 	{
