@@ -2,6 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="UI"><UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier></Filter>
+    <Filter Include="UI\Dialogs"><UniqueIdentifier>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</UniqueIdentifier></Filter>
     <Filter Include="Engine"><UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier></Filter>
     <Filter Include="Resources"><UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier></Filter>
   </ItemGroup>
@@ -10,8 +11,11 @@
     <ClCompile Include="UI\ChessGame.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\VectorRenderer.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\WinApp.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\Dialogs\PromotionDialog.cpp"><Filter>UI\Dialogs</Filter></ClCompile>
+    <ClCompile Include="UI\Dialogs\GameSettingsDialog.cpp"><Filter>UI\Dialogs</Filter></ClCompile>
+    <ClCompile Include="UI\WinUtility.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="Engine\Board.cpp"><Filter>Engine</Filter></ClCompile>
-    <ClCompile Include="Engine\OpeningBook.cpp"><Filter>Engine</Filter></ClCompile>	
+    <ClCompile Include="Engine\OpeningBook.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\MoveGenerator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\Zobrist.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\Evaluation.cpp"><Filter>Engine</Filter></ClCompile>
@@ -21,6 +25,9 @@
     <ClInclude Include="UI\ChessGame.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\VectorRenderer.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\WinApp.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\Dialogs\PromotionDialog.h"><Filter>UI\Dialogs</Filter></ClInclude>
+    <ClInclude Include="UI\Dialogs\GameSettingsDialog.h"><Filter>UI\Dialogs</Filter></ClInclude>
+    <ClInclude Include="UI\WinUtility.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Engine\Board.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\ChessConstants.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\OpeningBook.h"><Filter>Engine</Filter></ClInclude>

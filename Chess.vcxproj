@@ -56,6 +56,9 @@
     <ClCompile Include="UI\ChessGame.cpp" />
     <ClCompile Include="UI\VectorRenderer.cpp" />
     <ClCompile Include="UI\WinApp.cpp" />
+    <ClCompile Include="UI\Dialogs\PromotionDialog.cpp" />
+    <ClCompile Include="UI\Dialogs\GameSettingsDialog.cpp" />
+    <ClCompile Include="UI\WinUtility.cpp" />
     <ClCompile Include="Engine\Board.cpp" />
     <ClCompile Include="Engine\MoveGenerator.cpp" />
 	<ClCompile Include="Engine\OpeningBook.cpp" />
@@ -67,6 +70,9 @@
     <ClInclude Include="UI\ChessGame.h" />
     <ClInclude Include="UI\VectorRenderer.h" />
     <ClInclude Include="UI\WinApp.h" />
+    <ClInclude Include="UI\Dialogs\PromotionDialog.h" />
+    <ClInclude Include="UI\Dialogs\GameSettingsDialog.h" />
+    <ClInclude Include="UI\WinUtility.h" />
     <ClInclude Include="Engine\Board.h" />
     <ClInclude Include="Engine\OpeningBook.h" />
     <ClInclude Include="Engine\ChessConstants.h" />
