@@ -56,21 +56,55 @@ namespace Chess
         TranspositionTable m_transpositionTable;
 
         static constexpr int MAX_PLY = 64;
-        Move m_killerMoves[MAX_PLY][2]; // Killer move heuristic
-        int m_history[2][64][64]; // History heuristic: separate tables for each side to move
+
+        // Main thread heuristics - used for primary PV search
+        Move m_killerMoves[MAX_PLY][2];
+        int m_history[2][64][64];
 
         int m_numThreads = 1;
         std::atomic<bool> m_abortSearch{false};
 
+        // Thread-local data for worker threads - prevents data races
+        struct ThreadLocalData {
+            Move killerMoves[MAX_PLY][2];
+            int history[2][64][64];
+
+            ThreadLocalData() {
+                for (int i = 0; i < MAX_PLY; ++i) {
+                    killerMoves[i][0] = Move();
+                    killerMoves[i][1] = Move();
+                }
+                for (int side = 0; side < 2; ++side) {
+                    for (int from = 0; from < 64; ++from) {
+                        for (int to = 0; to < 64; ++to) {
+                            history[side][from][to] = 0;
+                        }
+                    }
+                }
+            }
+        };
+
         // Search algorithms
         int AlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
         int QuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
+
+        // Worker search with thread-local heuristics
+        int WorkerAlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
+                            ThreadLocalData& tld);
+        int WorkerQuiescence(Board& board, int alpha, int beta, int ply, int qDepth,
+                             ThreadLocalData& tld);
 
         bool ShouldStop() const;
 
         // Move ordering for better pruning
         void OrderMoves(std::vector<Move>& moves, const Board& board, Move ttMove, int ply);
         int ScoreMove(const Move& move, const Board& board, Move ttMove, int ply);
+
+        // Worker move ordering using thread-local data
+        void OrderMovesWorker(std::vector<Move>& moves, const Board& board, Move ttMove,
+                              int ply, const ThreadLocalData& tld);
+        int ScoreMoveWorker(const Move& move, const Board& board, Move ttMove, int ply,
+                            const ThreadLocalData& tld);
 
         void HelperSearch(Board board, int depth);
         int HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply);

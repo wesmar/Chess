@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 #include <mutex>
+#include <array>
 
 namespace Chess
 {
@@ -34,19 +35,27 @@ namespace Chess
 
         // Resize table to specified size in megabytes
         void Resize(size_t sizeInMB);
-        
+
         // Clear all entries
         void Clear();
 
         // Lookup position in table, returns true if usable entry found
         bool Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove);
-        
+
         // Store position evaluation in table
         void Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove);
 
     private:
         std::vector<TTEntry> m_entries;
         size_t m_size;
-        mutable std::mutex m_mutex;
+
+        // Striped locking for concurrent access - power of 2 for fast modulo
+        static constexpr size_t NUM_LOCKS = 128;
+        std::array<std::mutex, NUM_LOCKS> m_mutexes;
+
+        // Get lock index from entry index for striped locking
+        size_t GetLockIndex(size_t entryIndex) const {
+            return entryIndex & (NUM_LOCKS - 1);
+        }
     };
 }

@@ -158,60 +158,43 @@ namespace Chess
         return elapsed >= m_maxSearchTimeMs;
     }
 
-    // Main search function - find best move using iterative deepening
+    // Main search function - find best move using iterative deepening with root-parallel search
     Move AIPlayer::CalculateBestMove(const Board& board, int maxTimeMs)
     {
-        m_abortSearch.store(false);
+        m_abortSearch.store(false, std::memory_order_release);
         m_searchStartTime = std::chrono::steady_clock::now();
         m_maxSearchTimeMs = maxTimeMs;
 
         // Set search time based on difficulty level
         if (m_difficulty <= 2)
-        {
             m_maxSearchTimeMs = 100;
-        }
         else if (m_difficulty <= 4)
-        {
             m_maxSearchTimeMs = 1000;
-        }
         else if (m_difficulty <= 6)
-        {
             m_maxSearchTimeMs = 3000;
-        }
         else if (m_difficulty <= 8)
-        {
             m_maxSearchTimeMs = 5000;
-        }
         else
-        {
             m_maxSearchTimeMs = 10000;
-        }
 
         Board searchBoard = board;
-
         auto legalMoves = searchBoard.GenerateLegalMoves();
         if (legalMoves.empty())
-        {
-            return Move(); // No legal moves available
-        }
+            return Move();
 
-        // Try opening book first (difficulty 3+, early game only)
+        // Try opening book first for higher difficulties
         if (m_difficulty >= 3)
         {
-            // Estimate ply count from starting position (rough heuristic)
             int piecesOnBoard = 0;
             for (int sq = 0; sq < 64; ++sq)
             {
                 if (!board.GetPieceAt(sq).IsEmpty())
                     piecesOnBoard++;
             }
-            int estimatedPly = (32 - piecesOnBoard) * 2; // Rough estimate
-
+            int estimatedPly = (32 - piecesOnBoard) * 2;
             auto bookMove = ProbeBook(board, estimatedPly);
             if (bookMove.has_value())
-            {
                 return bookMove.value();
-            }
         }
 
         const int MAX_DEPTH = 30;
@@ -225,7 +208,7 @@ namespace Chess
             return legalMoves[dis(gen)];
         }
 
-        // Level 2: Random selection from top moves (favors captures)
+        // Level 2: Random from top moves
         if (m_difficulty == 2)
         {
             std::random_device rd;
@@ -235,17 +218,14 @@ namespace Chess
             return legalMoves[dis(gen)];
         }
 
-        // Initialize search data structures
+        // Clear TT and heuristics - safe since no search is running yet
         m_transpositionTable.Clear();
 
-        // Clear killer move tables
         for (int i = 0; i < MAX_PLY; ++i)
         {
             m_killerMoves[i][0] = Move();
             m_killerMoves[i][1] = Move();
         }
-
-        // Clear history heuristic tables (separate per side)
         for (int side = 0; side < 2; ++side)
         {
             for (int from = 0; from < 64; ++from)
@@ -257,59 +237,122 @@ namespace Chess
             }
         }
 
-        Move bestMoveSoFar = legalMoves[0];  // Safe fallback
+        Move bestMoveSoFar = legalMoves[0];
+        int bestScore = -INFINITY_SCORE;
 
-        // Launch helper threads if multi-threading enabled
-        std::vector<std::future<void>> helpers;
-        if (m_numThreads > 1 && m_difficulty >= 6) {
-            for (int i = 1; i < m_numThreads; ++i) {
-                int helperDepth = MAX_DEPTH + (i % 2); // Diversify search depth
-                helpers.push_back(std::async(std::launch::async,
-                    &AIPlayer::HelperSearch, this, searchBoard, helperDepth));
-            }
-        }
-
-        // Iterative deepening loop - gradually increase search depth
+        // Iterative deepening with root-parallel search
         for (int depth = 1; depth <= MAX_DEPTH; ++depth)
         {
             if (ShouldStop()) break;
 
-            AlphaBeta(searchBoard, depth, -INFINITY_SCORE, INFINITY_SCORE, 0);
+            // Step 1: Search PV move in main thread first
+            OrderMoves(legalMoves, searchBoard, bestMoveSoFar, 0);
 
-            // Don't use results if time ran out during search
+            searchBoard.MakeMoveUnchecked(legalMoves[0]);
+            int pvScore = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, INFINITY_SCORE, 1);
+            searchBoard.UndoMove();
+
             if (ShouldStop()) break;
 
-            // Retrieve best move from transposition table
-            Move ttMove;
-            int dummy;
-            if (m_transpositionTable.Probe(searchBoard.GetZobristKey(), 0,
-                                           -INFINITY_SCORE, INFINITY_SCORE,
-                                           dummy, ttMove))
+            bestMoveSoFar = legalMoves[0];
+            bestScore = pvScore;
+
+			// Step 2: Root-parallel search for remaining moves with dynamic load balancing
+            if (m_numThreads > 1 && legalMoves.size() > 1 && depth >= 4)
             {
-                if (ttMove.GetFrom() != ttMove.GetTo())
+                int actualThreads = std::min(m_numThreads, static_cast<int>(legalMoves.size() - 1));
+                std::vector<std::future<std::pair<Move, int>>> futures;
+
+                // Stable copy for all worker threads to prevent data races
+                const Board rootBoard = searchBoard;
+                const int currentAlpha = bestScore;
+                const size_t totalMoves = legalMoves.size();
+
+                // Shared atomic counter for dynamic work distribution
+                auto nextMoveIndex = std::make_shared<std::atomic<size_t>>(1);
+
+                for (int t = 0; t < actualThreads; ++t)
                 {
-                    // Verify move is legal before using it
-                    bool isLegal = false;
-                    for (const auto& legalMove : legalMoves)
-                    {
-                        if (legalMove.GetFrom() == ttMove.GetFrom() && 
-                            legalMove.GetTo() == ttMove.GetTo() &&
-                            legalMove.GetPromotion() == ttMove.GetPromotion())
-                        {
-                            bestMoveSoFar = legalMove;
-                            isLegal = true;
-                            break;
+                    futures.push_back(std::async(std::launch::async,
+                        [=, &legalMoves]() mutable -> std::pair<Move, int> {
+                            // Thread-local heuristics to avoid data races
+                            ThreadLocalData tld;
+                            Board localBoard = rootBoard;
+                            Move localBest;
+                            int localScore = -INFINITY_SCORE;
+
+                            // Each thread grabs next available move dynamically
+                            while (true)
+                            {
+                                size_t i = nextMoveIndex->fetch_add(1);
+                                if (i >= totalMoves) break;
+                                if (m_abortSearch.load(std::memory_order_acquire)) break;
+
+                                localBoard.MakeMoveUnchecked(legalMoves[i]);
+
+                                // PV-search: null-window first, re-search if it beats alpha
+                                int score = -WorkerAlphaBeta(localBoard, depth - 1,
+                                                             -currentAlpha - 1, -currentAlpha, 1, tld);
+                                if (score > currentAlpha && !m_abortSearch.load(std::memory_order_acquire))
+                                {
+                                    score = -WorkerAlphaBeta(localBoard, depth - 1,
+                                                             -INFINITY_SCORE, -currentAlpha, 1, tld);
+                                }
+
+                                localBoard.UndoMove();
+
+                                if (score > localScore)
+                                {
+                                    localScore = score;
+                                    localBest = legalMoves[i];
+                                }
+                            }
+                            return std::make_pair(localBest, localScore);
                         }
+                    ));
+                }
+
+				// Collect results from worker threads
+                for (auto& f : futures)
+                {
+                    auto [move, score] = f.get();
+                    if (m_abortSearch.load(std::memory_order_acquire)) continue;
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestMoveSoFar = move;
+                    }
+                }
+            }
+            else
+            {
+                // Single-threaded fallback for remaining moves
+                for (size_t i = 1; i < legalMoves.size(); ++i)
+                {
+                    if (ShouldStop()) break;
+
+                    searchBoard.MakeMoveUnchecked(legalMoves[i]);
+
+                    // PV-search with null window
+                    int score = -AlphaBeta(searchBoard, depth - 1, -bestScore - 1, -bestScore, 1);
+                    if (score > bestScore && !ShouldStop())
+                    {
+                        score = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, -bestScore, 1);
+                    }
+
+                    searchBoard.UndoMove();
+
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestMoveSoFar = legalMoves[i];
                     }
                 }
             }
         }
 
-        // Stop helper threads
-        m_abortSearch.store(true);
-        for (auto& f : helpers) {
-            if (f.valid()) f.wait();
-        }
+        // Wait for all threads to complete before returning
+        m_abortSearch.store(true, std::memory_order_release);
 
         return bestMoveSoFar;
     }
@@ -545,6 +588,249 @@ namespace Chess
         }
 
         return alpha;
+    }
+
+    // Worker thread alpha-beta search - uses thread-local heuristics to avoid data races
+    int AIPlayer::WorkerAlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
+                                   ThreadLocalData& tld)
+    {
+        // Frequent time checking for responsiveness
+        static thread_local int nodeCounter = 0;
+        if ((++nodeCounter & 1023) == 0)
+        {
+            if (ShouldStop()) return 0;
+        }
+
+        uint64_t zobristKey = board.GetZobristKey();
+        Move ttMove;
+        int ttScore;
+        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove))
+        {
+            return ttScore;
+        }
+
+        if (depth == 0)
+        {
+            return WorkerQuiescence(board, alpha, beta, ply, 0, tld);
+        }
+
+        auto moves = board.GenerateLegalMoves();
+        if (moves.empty())
+        {
+            if (board.IsInCheck(board.GetCurrentPlayer()))
+            {
+                return -MATE_SCORE + ply;
+            }
+            return 0;
+        }
+
+        // Null move pruning for non-check positions
+        if (depth >= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
+        {
+            const int R = 2;
+            board.MakeNullMoveUnchecked();
+            int score = -WorkerAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1, tld);
+            board.UndoNullMove();
+
+            if (score >= beta)
+            {
+                return beta;
+            }
+        }
+
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+        const int sideIndex = static_cast<int>(sideToMove);
+
+        OrderMovesWorker(moves, board, ttMove, ply, tld);
+
+        Move bestMove;
+        int bestScore = -INFINITY_SCORE;
+        uint8_t flag = TT_ALPHA;
+
+        bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+        int moveIndex = 0;
+
+        for (const auto& move : moves)
+        {
+            if ((moveIndex & 15) == 0 && ShouldStop()) break;
+
+            board.MakeMoveUnchecked(move);
+
+            int score;
+            bool isQuiet = !move.IsCapture() && !move.IsPromotion() &&
+                           !move.IsEnPassant() && !move.IsCastling();
+
+            bool applyLMR = depth >= 3 && moveIndex >= 4 && !sideInCheck && isQuiet;
+
+            if (applyLMR)
+            {
+                score = -WorkerAlphaBeta(board, depth - 2, -beta, -alpha, ply + 1, tld);
+                if (score > alpha)
+                {
+                    score = -WorkerAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1, tld);
+                }
+            }
+            else
+            {
+                score = -WorkerAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1, tld);
+            }
+
+            board.UndoMove();
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestMove = move;
+            }
+
+            if (score >= beta)
+            {
+                // Update thread-local heuristics only
+                if (isQuiet)
+                {
+                    tld.history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
+
+                    if (ply < MAX_PLY)
+                    {
+                        tld.killerMoves[ply][1] = tld.killerMoves[ply][0];
+                        tld.killerMoves[ply][0] = move;
+                    }
+                }
+                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove);
+                return beta;
+            }
+
+            if (score > alpha)
+            {
+                alpha = score;
+                flag = TT_EXACT;
+            }
+
+            moveIndex++;
+        }
+
+        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove);
+        return bestScore;
+    }
+
+    // Worker thread quiescence search - handles only tactical moves
+    int AIPlayer::WorkerQuiescence(Board& board, int alpha, int beta, int ply, int qDepth,
+                                    ThreadLocalData& tld)
+    {
+        if (ShouldStop() || qDepth >= 8)
+        {
+            return Evaluate(board);
+        }
+
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+
+        if (board.IsInCheck(sideToMove))
+        {
+            auto evasions = board.GenerateLegalMoves();
+            if (evasions.empty())
+            {
+                return -MATE_SCORE + ply;
+            }
+
+            OrderMovesWorker(evasions, board, Move(), ply, tld);
+
+            int best = -INFINITY_SCORE;
+
+            for (const auto& move : evasions)
+            {
+                board.MakeMoveUnchecked(move);
+                int score = -WorkerQuiescence(board, -beta, -alpha, ply + 1, qDepth + 1, tld);
+                board.UndoMove();
+
+                if (score > best) best = score;
+                if (score >= beta) return beta;
+                if (score > alpha) alpha = score;
+            }
+
+            return alpha;
+        }
+
+        int standPat = Evaluate(board);
+        if (standPat >= beta) return beta;
+        if (standPat > alpha) alpha = standPat;
+
+        auto moves = board.GenerateLegalMoves();
+        std::vector<Move> tacticalMoves;
+        tacticalMoves.reserve(moves.size());
+
+        for (const auto& move : moves)
+        {
+            if (move.IsCapture() || move.IsPromotion())
+            {
+                tacticalMoves.push_back(move);
+            }
+        }
+
+        OrderMovesWorker(tacticalMoves, board, Move(), ply, tld);
+
+        for (const auto& move : tacticalMoves)
+        {
+            board.MakeMoveUnchecked(move);
+            int score = -WorkerQuiescence(board, -beta, -alpha, ply + 1, qDepth + 1, tld);
+            board.UndoMove();
+
+            if (score >= beta) return beta;
+            if (score > alpha) alpha = score;
+        }
+
+        return alpha;
+    }
+
+    // Move ordering for worker threads using thread-local data
+    void AIPlayer::OrderMovesWorker(std::vector<Move>& moves, const Board& board, Move ttMove,
+                                     int ply, const ThreadLocalData& tld)
+    {
+        std::vector<std::pair<int, Move>> scoredMoves;
+
+        for (const auto& move : moves)
+        {
+            int score = ScoreMoveWorker(move, board, ttMove, ply, tld);
+            scoredMoves.push_back({score, move});
+        }
+
+        std::sort(scoredMoves.begin(), scoredMoves.end(),
+            [](const auto& a, const auto& b) { return a.first > b.first; });
+
+        moves.clear();
+        for (const auto& [score, move] : scoredMoves)
+        {
+            moves.push_back(move);
+        }
+    }
+
+    // Score move for worker threads using thread-local heuristics
+    int AIPlayer::ScoreMoveWorker(const Move& move, const Board& board, Move ttMove, int ply,
+                                   const ThreadLocalData& tld)
+    {
+        if (move == ttMove) return 10000000;
+
+        if (move.IsCapture())
+        {
+            Piece victim = move.GetCaptured();
+            Piece aggressor = board.GetPieceAt(move.GetFrom());
+            int victimValue = PIECE_VALUES[static_cast<int>(victim.GetType())];
+            int aggressorValue = PIECE_VALUES[static_cast<int>(aggressor.GetType())];
+            return 1000000 + victimValue * 10 - aggressorValue;
+        }
+
+        if (move.IsPromotion()) return 900000;
+
+        // Use thread-local killer moves
+        if (ply < MAX_PLY)
+        {
+            if (move == tld.killerMoves[ply][0]) return 800000;
+            if (move == tld.killerMoves[ply][1]) return 700000;
+        }
+
+        // Use thread-local history
+        const Piece movingPiece = board.GetPieceAt(move.GetFrom());
+        const int sideIndex = static_cast<int>(movingPiece.GetColor());
+        return tld.history[sideIndex][move.GetFrom()][move.GetTo()];
     }
 
     void AIPlayer::OrderMovesSimple(std::vector<Move>& moves, const Board& board, Move ttMove)

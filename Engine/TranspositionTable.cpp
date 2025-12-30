@@ -13,7 +13,7 @@ namespace Chess
     // Resize transposition table to specified size in megabytes
     void TranspositionTable::Resize(size_t sizeInMB)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        // Called only during initialization when no search is running
         size_t numEntries = (sizeInMB * 1024 * 1024) / sizeof(TTEntry);
 
         // Round down to nearest power of 2 for efficient indexing
@@ -25,6 +25,7 @@ namespace Chess
 
         m_size = powerOf2;
         m_entries.resize(m_size);
+
         for (auto& entry : m_entries)
         {
             entry.key = 0;
@@ -38,7 +39,7 @@ namespace Chess
     // Clear all entries in the transposition table
     void TranspositionTable::Clear()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        // Called only when search is not running (guaranteed by AIPlayer::CalculateBestMove)
         for (auto& entry : m_entries)
         {
             entry.key = 0;
@@ -52,8 +53,10 @@ namespace Chess
     // Probe transposition table for cached position evaluation
     bool TranspositionTable::Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
+        size_t lockIdx = GetLockIndex(index);
+
+        std::lock_guard<std::mutex> lock(m_mutexes[lockIdx]);
         TTEntry& entry = m_entries[index];
 
         // Check if entry matches current position
@@ -66,24 +69,24 @@ namespace Chess
         if (entry.depth < depth)
             return false;
 
-        // Return cached score based on bound type
+        // Exact score from previous search
         if (entry.flag == TT_EXACT)
         {
             outScore = entry.score;
             return true;
         }
 
-        // Alpha bound (upper bound) - score is at most this value
+        // Upper bound (fail-low) - score <= alpha
         if (entry.flag == TT_ALPHA && entry.score <= alpha)
         {
-            outScore = alpha;
+            outScore = entry.score;
             return true;
         }
 
-        // Beta bound (lower bound) - score is at least this value
+        // Lower bound (fail-high) - score >= beta
         if (entry.flag == TT_BETA && entry.score >= beta)
         {
-            outScore = beta;
+            outScore = entry.score;
             return true;
         }
 
@@ -93,11 +96,13 @@ namespace Chess
     // Store position evaluation in transposition table
     void TranspositionTable::Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
+        size_t lockIdx = GetLockIndex(index);
+
+        std::lock_guard<std::mutex> lock(m_mutexes[lockIdx]);
         TTEntry& entry = m_entries[index];
 
-        // Replace entry if empty or if new search is deeper
+        // Replace-by-depth strategy - prefer deeper searches
         if (entry.key == 0 || depth >= entry.depth)
         {
             entry.key = key;
