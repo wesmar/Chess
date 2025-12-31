@@ -1,5 +1,7 @@
 // OpeningBook.cpp
-// Hardcoded opening book with main line positions
+// Hardcoded opening book implementation with common chess opening lines
+// Provides known good moves for early game positions to improve AI play quality
+// Uses Zobrist hashing for fast position lookup in the book database
 #include "OpeningBook.h"
 #include <algorithm>
 #include <random>
@@ -7,44 +9,53 @@
 
 namespace Chess
 {
-    // Book entry: position hash -> list of possible moves
+    // Book entry structure mapping position hash to available moves
+    // Each position can store up to 4 alternative book moves for variety
     struct BookEntry
     {
-        uint64_t zobristKey;
-        uint16_t moves[4];      // Up to 4 alternative moves per position
-        uint8_t moveCount;
+        uint64_t zobristKey;        // Position hash for lookup
+        uint16_t moves[4];          // Up to 4 alternative moves per position (packed format)
+        uint8_t moveCount;          // Number of valid moves in the array
     };
 
-    // Storage for computed book entries (populated at runtime)
+    // Global storage for opening book entries
+    // Populated once at runtime by InitializeOpeningBook()
     static std::vector<BookEntry> g_bookEntries;
     static bool g_bookInitialized = false;
 
-    // Helper: convert algebraic notation to square index (e.g., "e2" -> 12)
+    // Convert algebraic square notation to internal index
+    // Example: 'e', '2' -> 12 (e2 square)
+    // Board layout: a1=0, b1=1, ..., h1=7, a2=8, ..., h8=63
     constexpr int AlgebraicToSquare(char file, char rank)
     {
         return (rank - '1') * 8 + (file - 'a');
     }
 
-    // Helper: play a sequence of moves and record position -> next move mapping
+    // Add an opening line to the book database
+    // Plays through the move sequence, recording each position with its next move
+    // This allows transpositions - same position reached via different move orders
+    // shares the same book entry
     static void AddBookLine(const std::vector<std::pair<int, int>>& moves)
     {
         Board board;
         board.ResetToStartingPosition();
 
+        // Process each move in the line
         for (size_t i = 0; i < moves.size(); ++i)
         {
+            // Get current position hash before making the move
             uint64_t key = board.GetZobristKey();
             int from = moves[i].first;
             int to = moves[i].second;
             uint16_t packedMove = PackMove(from, to);
 
-            // Find or create entry for this position
+            // Search for existing entry with this position hash
             auto it = std::find_if(g_bookEntries.begin(), g_bookEntries.end(),
                 [key](const BookEntry& e) { return e.zobristKey == key; });
 
             if (it != g_bookEntries.end())
             {
-                // Position exists, add move if not already present
+                // Position already exists in book - add move as alternative if not duplicate
                 bool found = false;
                 for (uint8_t j = 0; j < it->moveCount; ++j)
                 {
@@ -54,6 +65,7 @@ namespace Chess
                         break;
                     }
                 }
+                // Add new move variant if space available (max 4 moves per position)
                 if (!found && it->moveCount < 4)
                 {
                     it->moves[it->moveCount++] = packedMove;
@@ -61,7 +73,7 @@ namespace Chess
             }
             else
             {
-                // New position, create entry
+                // New position - create fresh book entry
                 BookEntry entry;
                 entry.zobristKey = key;
                 entry.moves[0] = packedMove;
@@ -69,23 +81,28 @@ namespace Chess
                 g_bookEntries.push_back(entry);
             }
 
-            // Make the move to advance to next position
+            // Advance board to next position in the line
             Move move(from, to);
             if (!board.MakeMove(move))
             {
-                break; // Invalid move sequence, stop this line
+                break; // Invalid move sequence - stop processing this line
             }
         }
     }
 
+    // Initialize the opening book with standard chess opening lines
+    // Called automatically on first book probe, or can be called explicitly at startup
+    // Book includes major openings: Ruy Lopez, Italian, Sicilian, Queen's Gambit, etc.
     void InitializeOpeningBook()
     {
+        // Prevent double initialization
         if (g_bookInitialized) return;
 
         g_bookEntries.clear();
-        g_bookEntries.reserve(50); // Preallocate for efficiency
+        g_bookEntries.reserve(50); // Preallocate for ~50 unique positions
 
-        // Square notation helpers
+        // Pre-calculate square indices for cleaner move notation
+        // These are computed at compile time (constexpr)
         constexpr int e2 = AlgebraicToSquare('e', '2');
         constexpr int e4 = AlgebraicToSquare('e', '4');
         constexpr int e5 = AlgebraicToSquare('e', '5');
@@ -114,103 +131,122 @@ namespace Chess
         constexpr int b5 = AlgebraicToSquare('b', '5');
         constexpr int b8 = AlgebraicToSquare('b', '8');
 
-        // Ruy Lopez: 1.e4 e5 2.Nf3 Nc6 3.Bb5
+        // ========== 1.e4 OPENINGS ==========
+
+        // Ruy Lopez (Spanish Game): 1.e4 e5 2.Nf3 Nc6 3.Bb5
+        // One of the oldest and most respected openings, aiming for long-term pressure
         AddBookLine({
             {e2, e4},   // 1.e4
             {e7, e5},   // 1...e5
-            {g1, f3},   // 2.Nf3
-            {b8, c6},   // 2...Nc6
-            {f1, b5}    // 3.Bb5
+            {g1, f3},   // 2.Nf3 - attacks e5 pawn
+            {b8, c6},   // 2...Nc6 - defends e5
+            {f1, b5}    // 3.Bb5 - pins knight, pressures center
         });
 
         // Italian Game: 1.e4 e5 2.Nf3 Nc6 3.Bc4
+        // Classical development aiming at f7 weakness
         AddBookLine({
             {e2, e4},   // 1.e4
             {e7, e5},   // 1...e5
             {g1, f3},   // 2.Nf3
             {b8, c6},   // 2...Nc6
-            {f1, c4}    // 3.Bc4
+            {f1, c4}    // 3.Bc4 - targets f7 square
         });
 
-        // Sicilian Defense: 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4
+        // Sicilian Defense (Open Sicilian): 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4
+        // Most popular response to 1.e4 at master level, asymmetrical and fighting
         AddBookLine({
             {e2, e4},   // 1.e4
-            {c7, c5},   // 1...c5
+            {c7, c5},   // 1...c5 - Sicilian Defense
             {g1, f3},   // 2.Nf3
-            {d7, d6},   // 2...d6
-            {d2, d4},   // 3.d4
+            {d7, d6},   // 2...d6 - prepares ...Nf6
+            {d2, d4},   // 3.d4 - challenges center
             {c5, d4},   // 3...cxd4
-            {f3, d4}    // 4.Nxd4
-        });
-
-        // Queen's Gambit: 1.d4 d5 2.c4
-        AddBookLine({
-            {d2, d4},   // 1.d4
-            {d7, d5},   // 1...d5
-            {c2, c4}    // 2.c4
-        });
-
-        // King's Indian Defense: 1.d4 Nf6 2.c4 g6 3.Nc3
-        AddBookLine({
-            {d2, d4},   // 1.d4
-            {g8, f6},   // 1...Nf6
-            {c2, c4},   // 2.c4
-            {g7, g6},   // 2...g6
-            {b1, c3}    // 3.Nc3
+            {f3, d4}    // 4.Nxd4 - Open Sicilian position
         });
 
         // French Defense: 1.e4 e6 2.d4 d5
+        // Solid but somewhat passive, leads to closed positions
         AddBookLine({
             {e2, e4},   // 1.e4
-            {e7, e6},   // 1...e6
+            {e7, e6},   // 1...e6 - French Defense
             {d2, d4},   // 2.d4
-            {d7, d5}    // 2...d5
+            {d7, d5}    // 2...d5 - challenges e4 pawn
         });
 
         // Caro-Kann Defense: 1.e4 c6 2.d4 d5
+        // Solid defense similar to French but avoids blocked light-squared bishop
         AddBookLine({
             {e2, e4},   // 1.e4
-            {c7, c6},   // 1...c6
+            {c7, c6},   // 1...c6 - Caro-Kann Defense
             {d2, d4},   // 2.d4
-            {d7, d5}    // 2...d5
+            {d7, d5}    // 2...d5 - challenges center with c6 support
+        });
+
+        // ========== 1.d4 OPENINGS ==========
+
+        // Queen's Gambit: 1.d4 d5 2.c4
+        // Classic opening offering pawn sacrifice for central control
+        AddBookLine({
+            {d2, d4},   // 1.d4
+            {d7, d5},   // 1...d5
+            {c2, c4}    // 2.c4 - Queen's Gambit offered
+        });
+
+        // King's Indian Defense: 1.d4 Nf6 2.c4 g6 3.Nc3
+        // Hypermodern defense allowing White center then counterattacking
+        AddBookLine({
+            {d2, d4},   // 1.d4
+            {g8, f6},   // 1...Nf6 - Indian Defense
+            {c2, c4},   // 2.c4
+            {g7, g6},   // 2...g6 - King's Indian setup
+            {b1, c3}    // 3.Nc3
         });
 
         g_bookInitialized = true;
     }
 
+    // Probe the opening book for a move in the current position
+    // Returns a randomly selected book move if position is found, nullopt otherwise
+    // Random selection from available moves provides variety in play
     std::optional<Move> ProbeBook(const Board& board, int plyCount)
     {
-        // Ensure book is initialized
+        // Lazy initialization - ensure book is ready on first probe
         if (!g_bookInitialized)
         {
             InitializeOpeningBook();
         }
 
-        // Only use book in early game
+        // Exit book after configured ply depth (default 8 half-moves)
+        // This ensures AI starts thinking independently in middlegame
         if (plyCount >= BOOK_MAX_PLIES)
         {
             return std::nullopt;
         }
 
-        // Find position in book
+        // Search book for current position using Zobrist hash
         uint64_t key = board.GetZobristKey();
         auto it = std::find_if(g_bookEntries.begin(), g_bookEntries.end(),
             [key](const BookEntry& e) { return e.zobristKey == key; });
 
+        // Position not in book
         if (it == g_bookEntries.end() || it->moveCount == 0)
         {
-            return std::nullopt; // Position not in book
+            return std::nullopt;
         }
 
-        // Select random move from available book moves
+        // Randomly select one of the available book moves
+        // Using static RNG to maintain state across calls
         static std::random_device rd;
         static std::mt19937 gen(rd());
         std::uniform_int_distribution<> dis(0, it->moveCount - 1);
         int selectedIndex = dis(gen);
 
+        // Unpack the compact 16-bit move representation
         Move bookMove = UnpackToMove(it->moves[selectedIndex]);
 
-        // Verify the book move is legal in current position
+        // Validate book move against current legal moves
+        // This guards against book corruption or hash collisions
         auto legalMoves = board.GenerateLegalMoves();
         for (const auto& legal : legalMoves)
         {
@@ -218,10 +254,11 @@ namespace Chess
                 legal.GetTo() == bookMove.GetTo() &&
                 legal.GetPromotion() == bookMove.GetPromotion())
             {
-                return legal; // Return the legal move object
+                return legal; // Return fully-formed legal move object
             }
         }
 
-        return std::nullopt; // Book move not legal (shouldn't happen with correct book)
+        // Book move not legal - hash collision or corrupted book
+        return std::nullopt;
     }
 }
