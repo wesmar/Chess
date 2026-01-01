@@ -339,13 +339,13 @@ namespace Chess
         m_board[record.move.GetFrom()] = record.movedPiece;
         m_board[record.move.GetTo()] = record.capturedPiece;
 
-        // Restore special move states
+		// Restore special move states
         if (record.move.IsEnPassant())
         {
             // Restore captured pawn to its original square
             int captureSquare = (m_sideToMove == PlayerColor::White)
-                ? record.move.GetTo() + 8
-                : record.move.GetTo() - 8;
+                ? record.move.GetTo() - 8
+                : record.move.GetTo() + 8;
             m_board[captureSquare] = Piece(PieceType::Pawn, 
                 (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
         }
