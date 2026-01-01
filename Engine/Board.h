@@ -99,7 +99,8 @@ namespace Chess
         [[nodiscard]] bool IsStalemate() const;
         [[nodiscard]] bool IsDraw() const;
         [[nodiscard]] int CountRepetitions() const;
-        
+        [[nodiscard]] bool IsInsufficientMaterial() const;
+
         // ---------- Board Operations ----------
         void ResetToStartingPosition();
         bool LoadFEN(const std::string& fen);

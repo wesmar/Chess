@@ -467,6 +467,78 @@ namespace Chess
 		return count;
 	}
 
+    // Check for insufficient material to checkmate
+    bool Board::IsInsufficientMaterial() const
+    {
+        int whitePawns = 0, blackPawns = 0;
+        int whiteKnights = 0, blackKnights = 0;
+        int whiteBishops = 0, blackBishops = 0;
+        int whiteRooks = 0, blackRooks = 0;
+        int whiteQueens = 0, blackQueens = 0;
+        int whiteBishopColor = -1, blackBishopColor = -1;
+
+        for (int sq = 0; sq < 64; ++sq)
+        {
+            Piece piece = GetPieceAt(sq);
+            if (piece.IsEmpty()) continue;
+
+            PieceType type = piece.GetType();
+            bool isWhite = piece.IsColor(PlayerColor::White);
+
+            switch (type)
+            {
+            case PieceType::Pawn:
+                if (isWhite) whitePawns++; else blackPawns++;
+                break;
+            case PieceType::Knight:
+                if (isWhite) whiteKnights++; else blackKnights++;
+                break;
+            case PieceType::Bishop:
+                if (isWhite) {
+                    whiteBishops++;
+                    whiteBishopColor = (sq + sq / 8) % 2;
+                } else {
+                    blackBishops++;
+                    blackBishopColor = (sq + sq / 8) % 2;
+                }
+                break;
+            case PieceType::Rook:
+                if (isWhite) whiteRooks++; else blackRooks++;
+                break;
+            case PieceType::Queen:
+                if (isWhite) whiteQueens++; else blackQueens++;
+                break;
+            default:
+                break;
+            }
+        }
+
+        // Any pawns, rooks, or queens = sufficient material
+        if (whitePawns || blackPawns) return false;
+        if (whiteRooks || blackRooks) return false;
+        if (whiteQueens || blackQueens) return false;
+
+        int whitePieces = whiteKnights + whiteBishops;
+        int blackPieces = blackKnights + blackBishops;
+
+        // K vs K
+        if (whitePieces == 0 && blackPieces == 0) return true;
+
+        // K+minor vs K
+        if (whitePieces == 0 && blackPieces == 1) return true;
+        if (whitePieces == 1 && blackPieces == 0) return true;
+
+        // K+B vs K+B (same color bishops)
+        if (whiteBishops == 1 && blackBishops == 1 &&
+            whiteKnights == 0 && blackKnights == 0 &&
+            whiteBishopColor == blackBishopColor)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     // Determine current game state (playing, check, checkmate, stalemate, draw)
     GameState Board::GetGameState() const
     {
@@ -503,7 +575,11 @@ namespace Chess
             return GameState::Draw;
         }
 
-        // TODO: Add insufficient material check
+        // Check for insufficient material
+        if (IsInsufficientMaterial())
+        {
+            return GameState::Draw;
+        }
 
         return GameState::Playing;
     }
