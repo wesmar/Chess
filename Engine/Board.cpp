@@ -856,6 +856,7 @@ namespace Chess
         
         // Clear move history for new position
         board.m_moveHistory.clear();
+		board.m_nullMoveHistory.clear();
         
         return true;
     }
