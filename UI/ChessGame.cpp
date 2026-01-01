@@ -1,4 +1,4 @@
-﻿// ChessGame.cpp
+// ChessGame.cpp
 #define NOMINMAX
 #include "ChessGame.h"
 #include "../Engine/Evaluation.h"
@@ -372,6 +372,13 @@ namespace Chess
         // Check time limit
         if (ShouldStop()) return 0;
 
+        // Draw detection by repetition - check before TT probe
+        // If position occurred 2+ times before, opponent can force draw
+        if (ply > 0 && board.CountRepetitions() >= 2)
+        {
+            return 0; // Draw score
+        }
+
         // Probe transposition table for cached result
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
@@ -611,6 +618,12 @@ namespace Chess
         if ((++nodeCounter & 1023) == 0)
         {
             if (ShouldStop()) return 0;
+        }
+
+        // Draw detection by repetition
+        if (ply > 0 && board.CountRepetitions() >= 2)
+        {
+            return 0;
         }
 
         uint64_t zobristKey = board.GetZobristKey();
@@ -890,6 +903,12 @@ namespace Chess
     int AIPlayer::HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply)
     {
         if (m_abortSearch.load()) return 0;
+
+        // Draw detection by repetition
+        if (ply > 0 && board.CountRepetitions() >= 2)
+        {
+            return 0;
+        }
 
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;

@@ -5,4 +5,5 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="Chess.vcxproj" Id="e6f8d4a1-1234-5678-90ab-cdef12345678" />
+  <Project Path="ChessEngineUCI.vcxproj" Id="a1b2c3d4-e5f6-7890-1234-567890abcdef" />
 </Solution>
