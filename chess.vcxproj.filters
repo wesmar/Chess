@@ -5,6 +5,7 @@
     <Filter Include="UI\Dialogs"><UniqueIdentifier>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</UniqueIdentifier></Filter>
     <Filter Include="Engine"><UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier></Filter>
     <Filter Include="Resources"><UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier></Filter>
+    <Filter Include="UCI"><UniqueIdentifier>{B1C2D3E4-F5A6-7890-BCDE-F12345678901}</UniqueIdentifier></Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="UI\main.cpp"><Filter>UI</Filter></ClCompile>
@@ -20,6 +21,8 @@
     <ClCompile Include="Engine\Zobrist.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\Evaluation.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\TranspositionTable.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\Move.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="UCI\UCIMain.cpp"><Filter>UCI</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="UI\ChessGame.h"><Filter>UI</Filter></ClInclude>
@@ -38,6 +41,7 @@
     <ClInclude Include="Engine\Evaluation.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\MoveGenerator.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Resources\Resource.h"><Filter>Resources</Filter></ClInclude>
+    <ClInclude Include="UCI\UCIEngine.h"><Filter>UCI</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup><ResourceCompile Include="Resources\Chess.rc"><Filter>Resources</Filter></ResourceCompile></ItemGroup>
 </Project>

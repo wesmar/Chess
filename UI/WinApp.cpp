@@ -298,6 +298,10 @@ namespace Chess
             OnPaint();
             return 0;
             
+        case WM_ERASEBKGND:
+            // Skip background erase - we handle it in double-buffered OnPaint
+            return 1;
+            
         case WM_SIZE:
         {
             int width = LOWORD(lParam);

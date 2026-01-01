@@ -8,6 +8,9 @@
 #include <vector>
 #include <memory>
 
+// Forward declaration to avoid circular include with Board.h
+namespace Chess { class Board; }
+
 namespace Chess
 {
     // ---------- Move Representation (32-bit packed) ----------
@@ -112,6 +115,14 @@ namespace Chess
 
             return result;
         }
+
+        // Convert move to UCI format (e.g., "e2e4", "e7e8q", "e1g1")
+        // This is the standard format used by chess GUIs.
+        [[nodiscard]] std::string ToUCI() const;
+
+        // Parse UCI move string and find matching legal move.
+        // Returns nullopt if the move string is invalid or illegal.
+        static std::optional<Move> FromUCI(const std::string& uci, const Board& board);
 
         // Equality comparison
         constexpr bool operator==(const Move& other) const noexcept

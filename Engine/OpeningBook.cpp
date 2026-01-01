@@ -81,12 +81,25 @@ namespace Chess
                 g_bookEntries.push_back(entry);
             }
 
-            // Advance board to next position in the line
-            Move move(from, to);
-            if (!board.MakeMove(move))
-            {
-                break; // Invalid move sequence - stop processing this line
-            }
+			// Advance board to next position in the line
+			// Find the legal move matching from/to to get correct MoveType flags
+			// (capture, castle, en passant, etc.) for proper move execution
+			auto legalMoves = board.GenerateLegalMoves();
+			auto moveIt = std::find_if(legalMoves.begin(), legalMoves.end(),
+				[from, to](const Move& m) {
+					return m.GetFrom() == from && m.GetTo() == to;
+				});
+
+			if (moveIt == legalMoves.end())
+			{
+				break; // Invalid move sequence - stop processing this line
+			}
+
+			// Use the fully-formed legal move with correct type flags
+			if (!board.MakeMove(*moveIt))
+			{
+				break; // Move execution failed - stop processing this line
+			}
         }
     }
 

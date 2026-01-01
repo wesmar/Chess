@@ -88,6 +88,13 @@ namespace Chess
         }
     }
 
+    void AIPlayer::AbortSearch()
+    {
+        // Signal all search threads to stop as soon as possible.
+        // The search loops check this flag periodically and will exit.
+        m_abortSearch.store(true, std::memory_order_release);
+    }
+
     // Assign score to move for move ordering optimization
     int AIPlayer::ScoreMove(const Move& move, const Board& board, Move ttMove, int ply)
     {
@@ -152,6 +159,10 @@ namespace Chess
     // Check if search time limit has been reached
     bool AIPlayer::ShouldStop() const
     {
+        // Check abort flag first for immediate response to UCI "stop"
+        if (m_abortSearch.load(std::memory_order_acquire))
+            return true;
+
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - m_searchStartTime
         ).count();
@@ -182,20 +193,20 @@ namespace Chess
         if (legalMoves.empty())
             return Move();
 
-        // Try opening book first for higher difficulties
-        if (m_difficulty >= 3)
-        {
-            int piecesOnBoard = 0;
-            for (int sq = 0; sq < 64; ++sq)
-            {
-                if (!board.GetPieceAt(sq).IsEmpty())
-                    piecesOnBoard++;
-            }
-            int estimatedPly = (32 - piecesOnBoard) * 2;
-            auto bookMove = ProbeBook(board, estimatedPly);
-            if (bookMove.has_value())
-                return bookMove.value();
-        }
+		// Try opening book first for higher difficulties
+		if (m_difficulty >= 3)
+		{
+			// Calculate actual ply count from move number and side to move
+			// Formula: ply = (fullMoveNumber - 1) * 2 + (side == Black ? 1 : 0)
+			// Example: Move 1 White = ply 0, Move 1 Black = ply 1, Move 2 White = ply 2
+			int ply = (board.GetFullMoveNumber() - 1) * 2;
+			if (board.GetSideToMove() == PlayerColor::Black)
+				ply++;
+			
+			auto bookMove = ProbeBook(board, ply);
+			if (bookMove.has_value())
+				return bookMove.value();
+		}
 
         const int MAX_DEPTH = 30;
 
@@ -390,19 +401,22 @@ namespace Chess
             return 0; // Stalemate
         }
 
-        // Null move pruning
-        if (depth >= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
-        {
-            const int R = 2;
-            board.MakeNullMoveUnchecked();
-            int score = -AlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
-            board.UndoNullMove();
+		// Null move pruning - disabled in endgames to avoid zugzwang errors
+		// In positions with low material (phase < 64), zugzwang is common
+		// and null-move can produce false beta cutoffs
+		int phase = ComputePhase(board);
+		if (depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		{
+			const int R = 2;
+			board.MakeNullMoveUnchecked();
+			int score = -AlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
+			board.UndoNullMove();
 
-            if (score >= beta)
-            {
-                return beta;
-            }
-        }
+			if (score >= beta)
+			{
+				return beta;
+			}
+		}
 
         const PlayerColor sideToMove = board.GetCurrentPlayer();
         const int sideIndex = static_cast<int>(sideToMove);
@@ -624,19 +638,20 @@ namespace Chess
             return 0;
         }
 
-        // Null move pruning for non-check positions
-        if (depth >= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
-        {
-            const int R = 2;
-            board.MakeNullMoveUnchecked();
-            int score = -WorkerAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1, tld);
-            board.UndoNullMove();
+		// Null move pruning - disabled in endgames to avoid zugzwang errors
+		int phase = ComputePhase(board);
+		if (depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		{
+			const int R = 2;
+			board.MakeNullMoveUnchecked();
+			int score = -WorkerAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1, tld);
+			board.UndoNullMove();
 
-            if (score >= beta)
-            {
-                return beta;
-            }
-        }
+			if (score >= beta)
+			{
+				return beta;
+			}
+		}
 
         const PlayerColor sideToMove = board.GetCurrentPlayer();
         const int sideIndex = static_cast<int>(sideToMove);
@@ -901,18 +916,20 @@ namespace Chess
             return 0;
         }
 
-        if (depth >= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
-        {
-            const int R = 2;
-            board.MakeNullMoveUnchecked();
-            int score = -HelperAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
-            board.UndoNullMove();
+		// Null move pruning - disabled in endgames to avoid zugzwang errors
+		int phase = ComputePhase(board);
+		if (depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		{
+			const int R = 2;
+			board.MakeNullMoveUnchecked();
+			int score = -HelperAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
+			board.UndoNullMove();
 
-            if (score >= beta)
-            {
-                return beta;
-            }
-        }
+			if (score >= beta)
+			{
+				return beta;
+			}
+		}
 
         OrderMovesSimple(moves, board, ttMove);
 

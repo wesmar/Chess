@@ -48,6 +48,10 @@ namespace Chess
 
         void SetThreads(int threads);
 
+        // Abort the current search immediately.
+        // Used by UCI "stop" command to interrupt analysis.
+        void AbortSearch();
+
     private:
         DifficultyLevel m_difficulty;
         std::chrono::steady_clock::time_point m_searchStartTime;

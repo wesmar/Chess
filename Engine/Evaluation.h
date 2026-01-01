@@ -23,6 +23,10 @@ namespace Chess
     // Get base material value for piece type
     int GetPieceValue(PieceType type);
     
-    // Get positional bonus for piece on given square
-    int GetPSTValue(PieceType type, int square, PlayerColor color);
+	// Get positional bonus for piece on given square
+	int GetPSTValue(PieceType type, int square, PlayerColor color);
+
+	// Compute game phase as continuous value from 0 (endgame) to 256 (opening)
+	// Based on remaining material with weights: Q=4, R=2, B=1, N=1
+	int ComputePhase(const Board& board);
 }
