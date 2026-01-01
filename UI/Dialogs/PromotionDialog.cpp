@@ -43,6 +43,7 @@ namespace Chess
     {
         // Static variable to store piece color across message callbacks
         static PlayerColor pieceColor = PlayerColor::White;
+        static HFONT hDialogFont = nullptr;
         
         switch (msg)
         {
@@ -80,16 +81,17 @@ namespace Chess
             
             // Create large font for clear piece symbol visibility
             // Uses Segoe UI Symbol for proper Unicode chess character rendering
-            HFONT hFont = CreateFont(48, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            if (hDialogFont) DeleteObject(hDialogFont);
+            hDialogFont = CreateFont(48, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     DEFAULT_PITCH, L"Segoe UI Symbol");
-            
+
             // Apply font to all promotion buttons
-            SendDlgItemMessage(hwnd, IDC_PROMOTE_QUEEN, WM_SETFONT, (WPARAM)hFont, TRUE);
-            SendDlgItemMessage(hwnd, IDC_PROMOTE_ROOK, WM_SETFONT, (WPARAM)hFont, TRUE);
-            SendDlgItemMessage(hwnd, IDC_PROMOTE_BISHOP, WM_SETFONT, (WPARAM)hFont, TRUE);
-            SendDlgItemMessage(hwnd, IDC_PROMOTE_KNIGHT, WM_SETFONT, (WPARAM)hFont, TRUE);
+            SendDlgItemMessage(hwnd, IDC_PROMOTE_QUEEN, WM_SETFONT, (WPARAM)hDialogFont, TRUE);
+            SendDlgItemMessage(hwnd, IDC_PROMOTE_ROOK, WM_SETFONT, (WPARAM)hDialogFont, TRUE);
+            SendDlgItemMessage(hwnd, IDC_PROMOTE_BISHOP, WM_SETFONT, (WPARAM)hDialogFont, TRUE);
+            SendDlgItemMessage(hwnd, IDC_PROMOTE_KNIGHT, WM_SETFONT, (WPARAM)hDialogFont, TRUE);
             
             return TRUE;
         }
@@ -124,7 +126,15 @@ namespace Chess
             }
             break;
         }
-        
+
+        case WM_DESTROY:
+            if (hDialogFont)
+            {
+                DeleteObject(hDialogFont);
+                hDialogFont = nullptr;
+            }
+            return TRUE;
+
         case WM_CLOSE:
             // Handle window close button - treat as cancel
             EndDialog(hwnd, IDCANCEL);

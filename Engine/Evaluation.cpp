@@ -338,6 +338,141 @@ namespace Chess
         return score;
     }
 
+    // ========== PASSED PAWN EVALUATION ==========
+
+    // Bonus for passed pawns by rank (from white's perspective: rank 1-7)
+    // Exponential growth - pawns closer to promotion are much more valuable
+    constexpr int PASSED_PAWN_BONUS[8] = {
+        0,    // rank 1 (impossible for pawn)
+        10,   // rank 2 (starting position)
+        15,   // rank 3
+        25,   // rank 4
+        45,   // rank 5
+        80,   // rank 6
+        140,  // rank 7 (one step from promotion)
+        0     // rank 8 (promoted, not a pawn anymore)
+    };
+
+    // Check if a pawn is passed (no enemy pawns blocking or attacking its path)
+    bool IsPassedPawn(const Board& board, int square, PlayerColor color)
+    {
+        int file = square % 8;
+        int rank = square / 8;
+
+        // Direction pawn moves (white: +1 rank, black: -1 rank)
+        int direction = (color == PlayerColor::White) ? 1 : -1;
+        int promotionRank = (color == PlayerColor::White) ? 7 : 0;
+
+        // Check all squares in front of pawn on same file and adjacent files
+        for (int f = std::max(0, file - 1); f <= std::min(7, file + 1); ++f)
+        {
+            // Scan from pawn's rank toward promotion rank
+            int r = rank + direction;
+            while (r != promotionRank + direction && r >= 0 && r < 8)
+            {
+                Piece piece = board.GetPieceAt(f, r);
+                if (piece.IsType(PieceType::Pawn) && !piece.IsColor(color))
+                {
+                    // Enemy pawn blocks or can capture - not passed
+                    return false;
+                }
+                r += direction;
+            }
+        }
+
+        return true;
+    }
+
+    // Manhattan distance between two squares
+    int KingDistance(int sq1, int sq2)
+    {
+        int file1 = sq1 % 8, rank1 = sq1 / 8;
+        int file2 = sq2 % 8, rank2 = sq2 / 8;
+        return std::max(std::abs(file1 - file2), std::abs(rank1 - rank2));
+    }
+
+    // Evaluate passed pawns for both sides
+    // Adds to mgScore and egScore via reference parameters
+    void EvaluatePassedPawns(const Board& board, int& mgScore, int& egScore)
+    {
+        int whiteKingSq = board.GetKingSquare(PlayerColor::White);
+        int blackKingSq = board.GetKingSquare(PlayerColor::Black);
+
+        for (int sq = 0; sq < 64; ++sq)
+        {
+            Piece piece = board.GetPieceAt(sq);
+            if (!piece.IsType(PieceType::Pawn)) continue;
+
+            PlayerColor color = piece.GetColor();
+
+            if (!IsPassedPawn(board, sq, color)) continue;
+
+            // Get rank from pawn's perspective (how far advanced)
+            int rank = sq / 8;
+            int advancedRank = (color == PlayerColor::White) ? rank : (7 - rank);
+
+            int bonus = PASSED_PAWN_BONUS[advancedRank];
+
+            // King proximity bonus (endgame only)
+            // Friendly king close = good, enemy king close = bad
+            int friendlyKingSq = (color == PlayerColor::White) ? whiteKingSq : blackKingSq;
+            int enemyKingSq = (color == PlayerColor::White) ? blackKingSq : whiteKingSq;
+
+            int friendlyDist = KingDistance(sq, friendlyKingSq);
+            int enemyDist = KingDistance(sq, enemyKingSq);
+
+            // Bonus if our king supports the pawn (endgame)
+            int kingSupport = (6 - friendlyDist) * 5;  // max +25 when adjacent
+
+            // Bonus if enemy king is far (endgame)
+            int enemyFar = (enemyDist - 2) * 8;  // bonus grows with distance
+
+            // Rook behind passed pawn evaluation
+            // Rook behind passer increases effectiveness, rook in front blocks it
+            int rookBonus = 0;
+            int pawnFile = sq % 8;
+            int pawnRank = sq / 8;
+
+            // Scan the file for rooks
+            for (int r = 0; r < 8; ++r)
+            {
+                if (r == pawnRank) continue;
+
+                Piece filePiece = board.GetPieceAt(pawnFile, r);
+                if (!filePiece.IsType(PieceType::Rook)) continue;
+
+                bool rookBehind;
+                if (color == PlayerColor::White)
+                    rookBehind = (r < pawnRank);  // Rook on lower rank = behind
+                else
+                    rookBehind = (r > pawnRank);  // Rook on higher rank = behind
+
+                if (filePiece.IsColor(color))
+                {
+                    // Friendly rook
+                    rookBonus += rookBehind ? 35 : -15;  // Behind = good, in front = bad
+                }
+                else
+                {
+                    // Enemy rook
+                    rookBonus += rookBehind ? -40 : 20;  // Enemy behind = bad for us
+                }
+            }
+
+            // Apply scores
+            if (color == PlayerColor::White)
+            {
+                mgScore += bonus;
+                egScore += bonus + bonus / 2 + kingSupport + enemyFar + rookBonus;
+            }
+            else
+            {
+                mgScore -= bonus;
+                egScore -= bonus + bonus / 2 + kingSupport + enemyFar + rookBonus;
+            }
+        }
+    }
+
     // ========== MAIN EVALUATION FUNCTION ==========
 
     // Complete position evaluation combining multiple factors
@@ -434,13 +569,17 @@ namespace Chess
         mgScore += pawnStructure;
         egScore += pawnStructure;
 
-        // 6. TEMPO BONUS
+        // 6. PASSED PAWNS
+        // Reward advanced passed pawns with king support in endgame
+        EvaluatePassedPawns(board, mgScore, egScore);
+
+        // 7. TEMPO BONUS
         // Small bonus for side to move (having the initiative)
         int tempo = (board.GetSideToMove() == PlayerColor::White) ? 10 : -10;
         mgScore += tempo;
         egScore += tempo;
 
-        // 7. TAPERED EVALUATION
+        // 8. TAPERED EVALUATION
         // Smoothly blend middlegame and endgame scores based on phase
         // phase=256 (opening) → use mgScore, phase=0 (endgame) → use egScore
         int score = (mgScore * phase + egScore * (256 - phase)) / 256;
