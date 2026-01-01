@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release_MinSize|Win32"><Configuration>Release_MinSize</Configuration><Platform>Win32</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release_MinSize|x64"><Configuration>Release_MinSize</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release_MinSize|Win32">
+      <Configuration>Release_MinSize</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release_MinSize|x64">
+      <Configuration>Release_MinSize</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
@@ -40,8 +52,11 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
-    <Link><SubSystem>Windows</SubSystem></Link>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release_MinSize'">
     <ClCompile>
@@ -49,7 +64,9 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <BufferSecurityCheck>false</BufferSecurityCheck>
     </ClCompile>
-    <Link><SubSystem>Windows</SubSystem></Link>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+    </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="UI\main.cpp" />
@@ -61,7 +78,7 @@
     <ClCompile Include="UI\WinUtility.cpp" />
     <ClCompile Include="Engine\Board.cpp" />
     <ClCompile Include="Engine\MoveGenerator.cpp" />
-	<ClCompile Include="Engine\OpeningBook.cpp" />
+    <ClCompile Include="Engine\OpeningBook.cpp" />
     <ClCompile Include="Engine\Zobrist.cpp" />
     <ClCompile Include="Engine\Evaluation.cpp" />
     <ClCompile Include="Engine\TranspositionTable.cpp" />
@@ -87,6 +104,8 @@
     <ClInclude Include="Resources\Resource.h" />
     <ClInclude Include="UCI\UCIEngine.h" />
   </ItemGroup>
-  <ItemGroup><ResourceCompile Include="Resources\Chess.rc" /></ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Resources\Chess.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
