@@ -40,10 +40,10 @@ namespace Chess
         void Clear();
 
         // Lookup position in table, returns true if usable entry found
-        bool Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove);
+        bool Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove, int ply);
 
         // Store position evaluation in table
-        void Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove);
+        void Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove, int ply);
 
     private:
         std::vector<TTEntry> m_entries;

@@ -51,7 +51,7 @@ namespace Chess
     }
 
     // Probe transposition table for cached position evaluation
-    bool TranspositionTable::Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove)
+    bool TranspositionTable::Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove, int ply)
     {
         size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
         size_t lockIdx = GetLockIndex(index);
@@ -69,24 +69,31 @@ namespace Chess
         if (entry.depth < depth)
             return false;
 
+        int score = entry.score;
+
+        if (score > 28000)
+            score -= ply;
+        else if (score < -28000)
+            score += ply;
+
         // Exact score from previous search
         if (entry.flag == TT_EXACT)
         {
-            outScore = entry.score;
+            outScore = score;
             return true;
         }
 
         // Upper bound (fail-low) - score <= alpha
-        if (entry.flag == TT_ALPHA && entry.score <= alpha)
+        if (entry.flag == TT_ALPHA && score <= alpha)
         {
-            outScore = entry.score;
+            outScore = score;
             return true;
         }
 
         // Lower bound (fail-high) - score >= beta
-        if (entry.flag == TT_BETA && entry.score >= beta)
+        if (entry.flag == TT_BETA && score >= beta)
         {
-            outScore = entry.score;
+            outScore = score;
             return true;
         }
 
@@ -94,7 +101,7 @@ namespace Chess
     }
 
     // Store position evaluation in transposition table
-    void TranspositionTable::Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove)
+    void TranspositionTable::Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove, int ply)
     {
         size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
         size_t lockIdx = GetLockIndex(index);
@@ -105,9 +112,16 @@ namespace Chess
         // Replace-by-depth strategy - prefer deeper searches
         if (entry.key == 0 || depth >= entry.depth)
         {
+            int scoreToStore = score;
+
+            if (score > 28000)
+                scoreToStore += ply;
+            else if (score < -28000)
+                scoreToStore -= ply;
+
             entry.key = key;
             entry.depth = static_cast<int16_t>(depth);
-            entry.score = score;
+            entry.score = scoreToStore;
             entry.flag = flag;
             entry.bestMove = bestMove;
         }

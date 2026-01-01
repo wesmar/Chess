@@ -26,14 +26,17 @@ namespace Chess
         if (m_difficulty < Difficulty::MIN) m_difficulty = Difficulty::MIN;
         if (m_difficulty > Difficulty::MAX) m_difficulty = Difficulty::MAX;
 
-        // Allocate transposition table based on difficulty
-        if (m_difficulty <= 6)
+        // Allocate transposition table and threads based on difficulty
+        if (m_difficulty >= 6)
         {
-            m_transpositionTable.Resize(16); // 16 MB for lower levels
+            m_transpositionTable.Resize(64);
+            m_numThreads = std::thread::hardware_concurrency();
+            if (m_numThreads < 1) m_numThreads = 4;
         }
         else
         {
-            m_transpositionTable.Resize(64); // 64 MB for higher levels
+            m_transpositionTable.Resize(16);
+            m_numThreads = 1;
         }
 
         // Initialize killer move heuristic storage
@@ -63,21 +66,16 @@ namespace Chess
         if (m_difficulty < Difficulty::MIN) m_difficulty = Difficulty::MIN;
         if (m_difficulty > Difficulty::MAX) m_difficulty = Difficulty::MAX;
 
-        // Adjust table size based on new difficulty
-        if (m_difficulty <= 6)
+        // Adjust table size and threads based on difficulty
+        if (m_difficulty >= 6)
         {
-            m_transpositionTable.Resize(16);
+            m_transpositionTable.Resize(64);
+            m_numThreads = std::thread::hardware_concurrency();
+            if (m_numThreads < 1) m_numThreads = 4;
         }
         else
         {
-            m_transpositionTable.Resize(64);
-        }
-
-        // Configure thread count based on difficulty
-        if (m_difficulty >= 6) {
-            m_numThreads = std::thread::hardware_concurrency();
-            if (m_numThreads < 1) m_numThreads = 4; // Fallback
-        } else {
+            m_transpositionTable.Resize(16);
             m_numThreads = 1;
         }
     }
@@ -378,7 +376,7 @@ namespace Chess
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
         int ttScore;
-        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove))
+        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove, ply))
         {
             return ttScore;
         }
@@ -490,7 +488,7 @@ namespace Chess
                         m_killerMoves[ply][0] = move;
                     }
                 }
-                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove);
+                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
                 return beta;
             }
 
@@ -504,7 +502,7 @@ namespace Chess
             moveIndex++;
         }
 
-        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove);
+        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove, ply);
         return bestScore;
     }
 
@@ -618,7 +616,7 @@ namespace Chess
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
         int ttScore;
-        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove))
+        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove, ply))
         {
             return ttScore;
         }
@@ -711,7 +709,7 @@ namespace Chess
                         tld.killerMoves[ply][0] = move;
                     }
                 }
-                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove);
+                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
                 return beta;
             }
 
@@ -724,7 +722,7 @@ namespace Chess
             moveIndex++;
         }
 
-        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove);
+        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove, ply);
         return bestScore;
     }
 
@@ -896,7 +894,7 @@ namespace Chess
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
         int ttScore;
-        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove))
+        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove, ply))
         {
             return ttScore;
         }
@@ -980,7 +978,7 @@ namespace Chess
 
             if (score >= beta)
             {
-                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove);
+                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
                 return beta;
             }
 
@@ -993,7 +991,7 @@ namespace Chess
             moveIndex++;
         }
 
-        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove);
+        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove, ply);
         return bestScore;
     }
 
