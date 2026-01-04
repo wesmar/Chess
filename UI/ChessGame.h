@@ -63,7 +63,7 @@ namespace Chess
 
         // Main thread heuristics - used for primary PV search
         Move m_killerMoves[MAX_PLY][2];
-        int m_history[2][64][64];
+        std::atomic<int> m_history[2][64][64];
 
         int m_numThreads = 1;
         std::atomic<bool> m_abortSearch{false};
@@ -71,19 +71,11 @@ namespace Chess
         // Thread-local data for worker threads - prevents data races
         struct ThreadLocalData {
             Move killerMoves[MAX_PLY][2];
-            int history[2][64][64];
 
             ThreadLocalData() {
                 for (int i = 0; i < MAX_PLY; ++i) {
                     killerMoves[i][0] = Move();
                     killerMoves[i][1] = Move();
-                }
-                for (int side = 0; side < 2; ++side) {
-                    for (int from = 0; from < 64; ++from) {
-                        for (int to = 0; to < 64; ++to) {
-                            history[side][from][to] = 0;
-                        }
-                    }
                 }
             }
         };

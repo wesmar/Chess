@@ -47,14 +47,14 @@ namespace Chess
             m_killerMoves[i][1] = Move();
         }
 
-        // Initialize history heuristic tables (separate per side)
+        // Initialize shared history heuristic tables (separate per side)
         for (int side = 0; side < 2; ++side)
         {
             for (int from = 0; from < 64; ++from)
             {
                 for (int to = 0; to < 64; ++to)
                 {
-                    m_history[side][from][to] = 0;
+                    m_history[side][from][to].store(0, std::memory_order_relaxed);
                 }
             }
         }
@@ -138,10 +138,10 @@ namespace Chess
         if (move == m_killerMoves[ply][0]) return 800000;
         if (move == m_killerMoves[ply][1]) return 700000;
 
-		// History heuristic: use table for the side that is making the move
+		// History heuristic: use shared table for the side that is making the move
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()];
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
         
         // Tactical bonus for moves to central squares
         // Central control is crucial in chess - pieces on central squares
@@ -272,7 +272,7 @@ namespace Chess
             {
                 for (int to = 0; to < 64; ++to)
                 {
-                    m_history[side][from][to] = 0;
+                    m_history[side][from][to].store(0, std::memory_order_relaxed);
                 }
             }
         }
@@ -550,8 +550,8 @@ namespace Chess
                 // Update history and killer moves for quiet moves
                 if (isQuiet)
                 {
-                    // Update history heuristic (side-specific table)
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
+                    // Update shared history heuristic using atomic operation
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
 
                     // Store killer move
                     if (ply < MAX_PLY)
@@ -782,10 +782,11 @@ namespace Chess
 
             if (score >= beta)
             {
-                // Update thread-local heuristics only
+                // Update heuristics on beta cutoff
                 if (isQuiet)
                 {
-                    tld.history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
+                    // Update shared history table using atomic operations
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
 
                     if (ply < MAX_PLY)
                     {
@@ -938,10 +939,27 @@ namespace Chess
             if (move == tld.killerMoves[ply][1]) return 700000;
         }
 
-        // Use thread-local history
+        // Read from shared history table
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        return tld.history[sideIndex][move.GetFrom()][move.GetTo()];
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
+
+        // Tactical bonus for central squares
+        // Central control is crucial in chess - pieces on central squares
+        // control more of the board and create tactical opportunities
+        int toSquare = move.GetTo();
+        int centerBonus = 0;
+
+        if (toSquare == 27 || toSquare == 28 || toSquare == 35 || toSquare == 36)
+        {
+            centerBonus = 400;
+        }
+        else if ((toSquare >= 18 && toSquare <= 21) || (toSquare >= 42 && toSquare <= 45))
+        {
+            centerBonus = 150;
+        }
+
+        return historyScore + centerBonus;
     }
 
     void AIPlayer::OrderMovesSimple(std::vector<Move>& moves, const Board& board, Move ttMove)
