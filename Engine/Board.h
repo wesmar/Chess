@@ -12,9 +12,50 @@
 
 namespace Chess
 {
+    // ---------- Piece List Structure ----------
+    struct PieceList
+    {
+        std::array<int, 16> squares;
+        int count = 0;
+
+        constexpr void Add(int square) noexcept
+        {
+            if (count < 16) squares[count++] = square;
+        }
+
+        constexpr void Remove(int square) noexcept
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                if (squares[i] == square)
+                {
+                    squares[i] = squares[--count];
+                    return;
+                }
+            }
+        }
+
+        constexpr void Update(int oldSquare, int newSquare) noexcept
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                if (squares[i] == oldSquare)
+                {
+                    squares[i] = newSquare;
+                    return;
+                }
+            }
+        }
+
+        constexpr void Clear() noexcept
+        {
+            count = 0;
+        }
+    };
+
     // Forward declarations
     class FENParser;
-    
+
     // ---------- Board Representation ----------
     // Main chess board class managing position, moves, and game state
     class Board
@@ -35,7 +76,13 @@ namespace Chess
                 return EMPTY_PIECE;
             return m_board[square];
         }
-        
+
+        // Accessor for optimized iteration in Evaluation and MoveGeneration
+        [[nodiscard]] constexpr const PieceList& GetPieceList(PlayerColor color) const noexcept
+        {
+            return m_pieceLists[static_cast<int>(color)];
+        }
+
         [[nodiscard]] constexpr Piece GetPieceAt(int file, int rank) const
         {
             return GetPieceAt(CoordinateToIndex(file, rank));
@@ -81,6 +128,11 @@ namespace Chess
             return m_zobristKey;
         }
 
+        [[nodiscard]] constexpr int GetIncrementalScore() const noexcept
+        {
+            return m_incrementalScore;
+        }
+
         // ---------- Move Generation & Execution ----------
         [[nodiscard]] std::vector<Move> GenerateLegalMoves() const;
         [[nodiscard]] bool IsMoveLegal(const Move& move) const;
@@ -116,7 +168,8 @@ namespace Chess
     private:
         // Friend declarations for FENParser
         friend class FENParser;
-        
+        friend class MoveGenerator;
+
         // ---------- Private Helper Methods ----------
         void UpdateKingSquare(PlayerColor color, int newSquare);
         void UpdateCastlingRights(int movedFrom, int movedTo, Piece movedPiece);
@@ -125,23 +178,32 @@ namespace Chess
 
         bool WouldMoveCauseCheck(const Move& move) const;
         bool IsSquareAttacked(int square, PlayerColor attackerColor) const;
-        
+
+        void UpdateIncrementalScore(int square, Piece piece, bool add);
+        void RecomputeIncrementalScore();
+
         // ---------- Board State ----------
         std::array<Piece, SQUARE_COUNT> m_board;
         PlayerColor m_sideToMove = PlayerColor::White;
-        
+
         // Castling rights: [White Kingside, White Queenside, Black Kingside, Black Queenside]
         std::array<bool, 4> m_castlingRights = {true, true, true, true};
-        
+
         int m_enPassantSquare = -1;       // Target square for en passant capture
         int m_halfMoveClock = 0;          // Fifty-move rule counter
         int m_fullMoveNumber = 1;         // Full move number (increments after black's move)
-        
+
         // King positions for quick check detection
         int m_kingSquares[2] = {-1, -1};
 
         // Zobrist hash for position comparison
         uint64_t m_zobristKey = 0;
+
+        // Piece lists for efficient iteration
+        PieceList m_pieceLists[2];
+
+        // Incremental evaluation (Material + PST)
+        int m_incrementalScore = 0;
 
         // ---------- Move History ----------
         struct MoveRecord
@@ -154,6 +216,7 @@ namespace Chess
             int previousHalfMoveClock = 0;
             int previousKingSquares[2] = {-1, -1};
             uint64_t previousZobristKey = 0;
+            int previousIncrementalScore = 0;
         };
 
         std::vector<MoveRecord> m_moveHistory;

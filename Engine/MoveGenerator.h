@@ -9,6 +9,8 @@
 
 namespace Chess
 {
+    struct PieceList;
+
     // Static class for generating chess moves
     class MoveGenerator
     {
@@ -18,7 +20,8 @@ namespace Chess
             const std::array<Piece, SQUARE_COUNT>& board,
             PlayerColor sideToMove,
             int enPassantSquare = -1,
-            const std::array<bool, 4>* castlingRights = nullptr
+            const std::array<bool, 4>* castlingRights = nullptr,
+            const PieceList* pieceList = nullptr
         );
 
         // Check if a square is under attack by specified color

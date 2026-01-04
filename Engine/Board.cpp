@@ -1,6 +1,7 @@
 // Board.cpp
 #include "Board.h"
 #include "Zobrist.h"
+#include "Evaluation.h"
 #include <algorithm>
 #include <sstream>
 #include <cctype>
@@ -41,6 +42,7 @@ namespace Chess
         if (result)
         {
             RecomputeZobristKey();
+            RecomputeIncrementalScore();
         }
         return result;
     }
@@ -91,6 +93,49 @@ namespace Chess
         }
     }
 
+    // Update incremental score by adding or removing a piece
+    // Uses global evaluation functions to ensure consistency between Board and Evaluation
+    void Board::UpdateIncrementalScore(int square, Piece piece, bool add)
+    {
+        if (piece.IsEmpty()) return;
+
+        // Use global helpers from Evaluation.h to ensure consistency
+        int value = GetPieceValue(piece.GetType());
+        int pstValue = GetPSTValue(piece.GetType(), square, piece.GetColor());
+
+        int score = value + pstValue;
+
+        // Score is tracked from White's perspective
+        // White pieces add, Black pieces subtract
+        if (piece.GetColor() == PlayerColor::Black)
+        {
+            score = -score;
+        }
+
+        if (add)
+        {
+            m_incrementalScore += score;
+        }
+        else
+        {
+            m_incrementalScore -= score;
+        }
+    }
+
+    // Recompute incremental score from scratch
+    void Board::RecomputeIncrementalScore()
+    {
+        m_incrementalScore = 0;
+        for (int sq = 0; sq < SQUARE_COUNT; ++sq)
+        {
+            Piece piece = m_board[sq];
+            if (!piece.IsEmpty())
+            {
+                UpdateIncrementalScore(sq, piece, true);
+            }
+        }
+    }
+
     // Generate all legal moves for current position
     std::vector<Move> Board::GenerateLegalMoves() const
     {
@@ -101,7 +146,8 @@ namespace Chess
             temp.m_board,
             temp.m_sideToMove,
             temp.m_enPassantSquare,
-            &temp.m_castlingRights
+            &temp.m_castlingRights,
+            &temp.m_pieceLists[static_cast<int>(temp.m_sideToMove)]
         );
 
         std::vector<Move> legalMoves;
@@ -160,6 +206,7 @@ namespace Chess
         record.previousKingSquares[0] = m_kingSquares[0];
         record.previousKingSquares[1] = m_kingSquares[1];
         record.previousZobristKey = m_zobristKey;
+        record.previousIncrementalScore = m_incrementalScore;
 
         const int from = move.GetFrom();
         const int to = move.GetTo();
@@ -168,11 +215,16 @@ namespace Chess
         // Remove piece from source square in Zobrist hash
         m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(movedPiece.GetType())][static_cast<int>(movedPiece.GetColor())][from];
 
-        // Remove captured piece from Zobrist hash
+        // Update incremental score: remove piece from old square
+        UpdateIncrementalScore(from, movedPiece, false);
+
+        // Remove captured piece from Zobrist hash and incremental score
         if (!m_board[to].IsEmpty())
         {
             Piece capturedPiece = m_board[to];
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(capturedPiece.GetType())][static_cast<int>(capturedPiece.GetColor())][to];
+            UpdateIncrementalScore(to, capturedPiece, false);
+            m_pieceLists[static_cast<int>(capturedPiece.GetColor())].Remove(to);
         }
 
         // Remove old en passant from hash
@@ -249,6 +301,12 @@ namespace Chess
         Piece finalPiece = m_board[to];
         m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(finalPiece.GetType())][static_cast<int>(finalPiece.GetColor())][to];
 
+        // Update incremental score: add piece to new square
+        UpdateIncrementalScore(to, finalPiece, true);
+
+        // Update piece list
+        m_pieceLists[static_cast<int>(m_sideToMove)].Update(from, to);
+
         // Update king position if king was moved
         if (m_board[move.GetTo()].GetType() == PieceType::King)
         {
@@ -259,14 +317,19 @@ namespace Chess
         if (move.IsCastling())
         {
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(castlingRook.GetType())][static_cast<int>(castlingRook.GetColor())][castlingRookTo];
+            UpdateIncrementalScore(castlingRookFrom, castlingRook, false);
+            UpdateIncrementalScore(castlingRookTo, castlingRook, true);
+            m_pieceLists[static_cast<int>(m_sideToMove)].Update(castlingRookFrom, castlingRookTo);
         }
 
-        // Handle en passant capture in Zobrist hash
+        // Handle en passant capture in Zobrist hash and incremental score
         if (move.IsEnPassant())
         {
             int capturedPawnSquare = to + ((m_sideToMove == PlayerColor::White) ? -8 : 8);
             Piece capturedPawn = Piece(PieceType::Pawn, (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(capturedPawn.GetType())][static_cast<int>(capturedPawn.GetColor())][capturedPawnSquare];
+            UpdateIncrementalScore(capturedPawnSquare, capturedPawn, false);
+            m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Remove(capturedPawnSquare);
         }
 
         // Update en passant square for next move
@@ -331,9 +394,21 @@ namespace Chess
         m_moveHistory.pop_back();
 
         // Restore side to move
-        m_sideToMove = (m_sideToMove == PlayerColor::White) 
-            ? PlayerColor::Black 
+        m_sideToMove = (m_sideToMove == PlayerColor::White)
+            ? PlayerColor::Black
             : PlayerColor::White;
+
+        const int from = record.move.GetFrom();
+        const int to = record.move.GetTo();
+
+        // Update piece list: move piece back to original square
+        m_pieceLists[static_cast<int>(m_sideToMove)].Update(to, from);
+
+        // If there was a captured piece, restore it to piece list
+        if (!record.capturedPiece.IsEmpty())
+        {
+            m_pieceLists[static_cast<int>(record.capturedPiece.GetColor())].Add(to);
+        }
 
         // Restore pieces to original positions
         m_board[record.move.GetFrom()] = record.movedPiece;
@@ -346,15 +421,17 @@ namespace Chess
             int captureSquare = (m_sideToMove == PlayerColor::White)
                 ? record.move.GetTo() - 8
                 : record.move.GetTo() + 8;
-            m_board[captureSquare] = Piece(PieceType::Pawn, 
+            Piece capturedPawn = Piece(PieceType::Pawn,
                 (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
+            m_board[captureSquare] = capturedPawn;
+            m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Add(captureSquare);
         }
         else if (record.move.IsCastling())
         {
             // Restore rook to original position
             int rookFrom, rookTo;
             int row = (m_sideToMove == PlayerColor::White) ? 0 : 7;
-            
+
             if (record.move.GetTo() % 8 == 6)  // Kingside castling
             {
                 rookFrom = CoordinateToIndex(5, row);  // Rook currently on f-file
@@ -365,9 +442,10 @@ namespace Chess
                 rookFrom = CoordinateToIndex(3, row);  // Rook currently on d-file
                 rookTo = CoordinateToIndex(0, row);    // Move back to a-file
             }
-            
+
             m_board[rookTo] = m_board[rookFrom];
             m_board[rookFrom] = EMPTY_PIECE;
+            m_pieceLists[static_cast<int>(m_sideToMove)].Update(rookFrom, rookTo);
         }
 
         // Restore all board state variables
@@ -377,6 +455,7 @@ namespace Chess
         m_kingSquares[0] = record.previousKingSquares[0];
         m_kingSquares[1] = record.previousKingSquares[1];
         m_zobristKey = record.previousZobristKey;
+        m_incrementalScore = record.previousIncrementalScore;
 
         // Decrement full move number if undoing black's move
         if (m_sideToMove == PlayerColor::Black)
@@ -841,23 +920,29 @@ namespace Chess
             board.m_halfMoveClock, board.m_fullMoveNumber))
             return false;
         
-        // Find king positions on the board
+        // Find king positions and rebuild piece lists
         board.m_kingSquares[0] = -1;
         board.m_kingSquares[1] = -1;
-        
+        board.m_pieceLists[0].Clear();
+        board.m_pieceLists[1].Clear();
+
         for (int i = 0; i < SQUARE_COUNT; ++i)
         {
             Piece piece = board.m_board[i];
-            if (piece.GetType() == PieceType::King)
+            if (!piece.IsEmpty())
             {
-                board.m_kingSquares[static_cast<int>(piece.GetColor())] = i;
+                if (piece.GetType() == PieceType::King)
+                {
+                    board.m_kingSquares[static_cast<int>(piece.GetColor())] = i;
+                }
+                board.m_pieceLists[static_cast<int>(piece.GetColor())].Add(i);
             }
         }
-        
+
         // Clear move history for new position
         board.m_moveHistory.clear();
 		board.m_nullMoveHistory.clear();
-        
+
         return true;
     }
 

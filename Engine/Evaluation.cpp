@@ -475,10 +475,11 @@ namespace Chess
 
 // Evaluate piece activity and tactical patterns
 // Bonuses for centralized pieces and active positioning
+// Optimized to use PieceLists for efficient iteration
 int EvaluateTacticalPosition(const Board& board)
 {
     int score = 0;
-    
+
     // Central squares provide strong positional advantage
     // These bonuses stack with PST values for compound effect
     constexpr int CENTER_CONTROL_BONUS[64] = {
@@ -491,24 +492,33 @@ int EvaluateTacticalPosition(const Board& board)
         0, 10, 15, 15, 15, 15, 10,  0,
         0,  0,  0,  0,  0,  0,  0,  0
     };
-    
-    for (int sq = 0; sq < 64; ++sq)
+
+    // Iterate only over existing pieces using PieceLists
+    for (int colorIdx = 0; colorIdx < 2; ++colorIdx)
     {
-        Piece piece = board.GetPieceAt(sq);
-        if (piece.IsEmpty()) continue;
-        
-        // Apply center bonus for knights and bishops (most benefit from centralization)
-        PieceType type = piece.GetType();
-        if (type == PieceType::Knight || type == PieceType::Bishop)
+        PlayerColor color = static_cast<PlayerColor>(colorIdx);
+        const PieceList& list = board.GetPieceList(color);
+
+        for (int i = 0; i < list.count; ++i)
         {
-            int bonus = CENTER_CONTROL_BONUS[sq];
-            if (piece.GetColor() == PlayerColor::White)
-                score += bonus;
-            else
-                score -= bonus;
+            int sq = list.squares[i];
+            Piece piece = board.GetPieceAt(sq);
+
+            if (piece.IsEmpty()) continue;
+
+            // Apply center bonus for knights and bishops (most benefit from centralization)
+            PieceType type = piece.GetType();
+            if (type == PieceType::Knight || type == PieceType::Bishop)
+            {
+                int bonus = CENTER_CONTROL_BONUS[sq];
+                if (color == PlayerColor::White)
+                    score += bonus;
+                else
+                    score -= bonus;
+            }
         }
     }
-    
+
     return score;
 }
 
@@ -519,77 +529,77 @@ int EvaluateTacticalPosition(const Board& board)
     // Uses tapered evaluation to smoothly blend middlegame and endgame scores
     int Evaluate(const Board& board)
     {
-        int mgScore = 0;  // Middlegame score
-        int egScore = 0;  // Endgame score
+        // Start with incremental baseline (Material + PST for middlegame)
+        int mgScore = board.GetIncrementalScore();
+        int egScore = 0;
         int whiteBishops = 0;
         int blackBishops = 0;
 
         // Compute game phase (256 = opening/middlegame, 0 = endgame)
         int phase = ComputePhase(board);
 
-        // 1. MATERIAL AND PIECE-SQUARE TABLES
-        for (int sq = 0; sq < 64; ++sq)
+        // 1. COMPUTE ENDGAME PST AND COMPLEX TERMS
+        // Optimized to iterate only over existing pieces using PieceLists (~4x faster)
+        auto processPieces = [&](PlayerColor color)
         {
-            Piece piece = board.GetPieceAt(sq);
-            if (piece.IsEmpty()) continue;
-
-            PieceType type = piece.GetType();
-            PlayerColor color = piece.GetColor();
-
-            int value = GetPieceValue(type);
-
-            // Get PST values for middlegame and endgame
-            int mgPST = GetPSTValue(type, sq, color);
-            int egPST = mgPST;  // Most pieces use same PST for both phases
-
-            // King uses different tables for middlegame vs endgame
-            if (type == PieceType::King)
+            const PieceList& list = board.GetPieceList(color);
+            for (int i = 0; i < list.count; ++i)
             {
-                // mgPST already set by GetPSTValue (uses KING_PST)
-                // Now get endgame PST value
-                int sq_adjusted = sq;
-                if (color == PlayerColor::White)
-                {
-                    int file = sq % 8;
-                    int rank = sq / 8;
-                    sq_adjusted = (7 - rank) * 8 + file;
-                }
-                egPST = KING_ENDGAME_PST[sq_adjusted];
-            }
+                int sq = list.squares[i];
+                Piece piece = board.GetPieceAt(sq);
 
-            // Add material and positional value to both scores
-            int mgPieceScore = value + mgPST;
-            int egPieceScore = value + egPST;
+                // Safety check to prevent desync errors
+                if (piece.IsEmpty()) continue;
 
-            if (type == PieceType::Queen)
-            {
-                PlayerColor enemyColor = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
-                if (IsSquareAttacked(board, sq, enemyColor))
+                PieceType type = piece.GetType();
+                int value = GetPieceValue(type);
+                int egPST = GetPSTValue(type, sq, color);
+
+                // King uses different tables for middlegame vs endgame
+                if (type == PieceType::King)
                 {
+                    int sq_adjusted = sq;
                     if (color == PlayerColor::White)
                     {
-                        mgPieceScore -= 150;
+                        int file = sq % 8;
+                        int rank = sq / 8;
+                        sq_adjusted = (7 - rank) * 8 + file;
                     }
-                    else
+                    egPST = KING_ENDGAME_PST[sq_adjusted];
+                }
+
+                int egPieceScore = value + egPST;
+
+                // Complex middlegame terms that rely on board context (not incremental)
+                if (type == PieceType::Queen)
+                {
+                    PlayerColor enemyColor = (color == PlayerColor::White) ?
+                        PlayerColor::Black : PlayerColor::White;
+                    if (IsSquareAttacked(board, sq, enemyColor))
                     {
-                        mgPieceScore += 150;
+                        if (color == PlayerColor::White)
+                            mgScore -= 150;
+                        else
+                            mgScore += 150;
                     }
                 }
-            }
 
-            if (color == PlayerColor::White)
-            {
-                mgScore += mgPieceScore;
-                egScore += egPieceScore;
-                if (type == PieceType::Bishop) whiteBishops++;
+                if (color == PlayerColor::White)
+                {
+                    egScore += egPieceScore;
+                    if (type == PieceType::Bishop) whiteBishops++;
+                }
+                else
+                {
+                    egScore -= egPieceScore;
+                    if (type == PieceType::Bishop) blackBishops++;
+                }
             }
-            else
-            {
-                mgScore -= mgPieceScore;
-                egScore -= egPieceScore;
-                if (type == PieceType::Bishop) blackBishops++;
-            }
-        }
+        };
+
+        // Process both White and Black piece lists
+        processPieces(PlayerColor::White);
+        processPieces(PlayerColor::Black);
 
         // 2. BISHOP PAIR BONUS
         // Having both bishops gives significant advantage in open positions

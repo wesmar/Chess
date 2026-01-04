@@ -1,5 +1,6 @@
 // MoveGenerator.cpp
 #include "MoveGenerator.h"
+#include "Board.h"
 #include <algorithm>
 #include <vector>
 
@@ -10,61 +11,117 @@ namespace Chess
         const std::array<Piece, SQUARE_COUNT>& board,
         PlayerColor sideToMove,
         int enPassantSquare,
-        const std::array<bool, 4>* castlingRights)
+        const std::array<bool, 4>* castlingRights,
+        const PieceList* pieceList)
     {
         std::vector<Move> moves;
-        
-        // Iterate through all squares on the board
-        for (int i = 0; i < SQUARE_COUNT; ++i)
+
+        if (pieceList)
         {
-            Piece piece = board[i];
-            if (piece.IsEmpty() || !piece.IsColor(sideToMove))
-                continue;
-            
-            // Generate moves based on piece type
-            switch (piece.GetType())
+            // Iterate through piece list
+            for (int idx = 0; idx < pieceList->count; ++idx)
             {
-            case PieceType::Pawn:
-            {
-                auto pawnMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
-                moves.insert(moves.end(), pawnMoves.begin(), pawnMoves.end());
-                break;
-            }
-            case PieceType::Knight:
-            {
-                auto knightMoves = GenerateKnightMoves(board, i, sideToMove);
-                moves.insert(moves.end(), knightMoves.begin(), knightMoves.end());
-                break;
-            }
-            case PieceType::Bishop:
-            {
-                auto bishopMoves = GenerateBishopMoves(board, i, sideToMove);
-                moves.insert(moves.end(), bishopMoves.begin(), bishopMoves.end());
-                break;
-            }
-            case PieceType::Rook:
-            {
-                auto rookMoves = GenerateRookMoves(board, i, sideToMove);
-                moves.insert(moves.end(), rookMoves.begin(), rookMoves.end());
-                break;
-            }
-            case PieceType::Queen:
-            {
-                auto queenMoves = GenerateQueenMoves(board, i, sideToMove);
-                moves.insert(moves.end(), queenMoves.begin(), queenMoves.end());
-                break;
-            }
-            case PieceType::King:
-            {
-                auto kingMoves = GenerateKingMoves(board, i, sideToMove, castlingRights);
-                moves.insert(moves.end(), kingMoves.begin(), kingMoves.end());
-                break;
-            }
-            default:
-                break;
+                int i = pieceList->squares[idx];
+                Piece piece = board[i];
+
+                // Generate moves based on piece type
+                switch (piece.GetType())
+                {
+                case PieceType::Pawn:
+                {
+                    auto pawnMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
+                    moves.insert(moves.end(), pawnMoves.begin(), pawnMoves.end());
+                    break;
+                }
+                case PieceType::Knight:
+                {
+                    auto knightMoves = GenerateKnightMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), knightMoves.begin(), knightMoves.end());
+                    break;
+                }
+                case PieceType::Bishop:
+                {
+                    auto bishopMoves = GenerateBishopMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), bishopMoves.begin(), bishopMoves.end());
+                    break;
+                }
+                case PieceType::Rook:
+                {
+                    auto rookMoves = GenerateRookMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), rookMoves.begin(), rookMoves.end());
+                    break;
+                }
+                case PieceType::Queen:
+                {
+                    auto queenMoves = GenerateQueenMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), queenMoves.begin(), queenMoves.end());
+                    break;
+                }
+                case PieceType::King:
+                {
+                    auto kingMoves = GenerateKingMoves(board, i, sideToMove, castlingRights);
+                    moves.insert(moves.end(), kingMoves.begin(), kingMoves.end());
+                    break;
+                }
+                default:
+                    break;
+                }
             }
         }
-        
+        else
+        {
+            // Fallback: Iterate through all squares on the board
+            for (int i = 0; i < SQUARE_COUNT; ++i)
+            {
+                Piece piece = board[i];
+                if (piece.IsEmpty() || !piece.IsColor(sideToMove))
+                    continue;
+
+                // Generate moves based on piece type
+                switch (piece.GetType())
+                {
+                case PieceType::Pawn:
+                {
+                    auto pawnMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
+                    moves.insert(moves.end(), pawnMoves.begin(), pawnMoves.end());
+                    break;
+                }
+                case PieceType::Knight:
+                {
+                    auto knightMoves = GenerateKnightMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), knightMoves.begin(), knightMoves.end());
+                    break;
+                }
+                case PieceType::Bishop:
+                {
+                    auto bishopMoves = GenerateBishopMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), bishopMoves.begin(), bishopMoves.end());
+                    break;
+                }
+                case PieceType::Rook:
+                {
+                    auto rookMoves = GenerateRookMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), rookMoves.begin(), rookMoves.end());
+                    break;
+                }
+                case PieceType::Queen:
+                {
+                    auto queenMoves = GenerateQueenMoves(board, i, sideToMove);
+                    moves.insert(moves.end(), queenMoves.begin(), queenMoves.end());
+                    break;
+                }
+                case PieceType::King:
+                {
+                    auto kingMoves = GenerateKingMoves(board, i, sideToMove, castlingRights);
+                    moves.insert(moves.end(), kingMoves.begin(), kingMoves.end());
+                    break;
+                }
+                default:
+                    break;
+                }
+            }
+        }
+
         return moves;
     }
 
