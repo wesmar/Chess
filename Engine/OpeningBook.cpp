@@ -114,7 +114,7 @@ namespace Chess
         g_bookEntries.clear();
         g_bookEntries.reserve(50); // Preallocate for ~50 unique positions
 
-        // Pre-calculate square indices for cleaner move notation
+		// Pre-calculate square indices for cleaner move notation
         // These are computed at compile time (constexpr)
         constexpr int e2 = AlgebraicToSquare('e', '2');
         constexpr int e4 = AlgebraicToSquare('e', '4');
@@ -136,11 +136,13 @@ namespace Chess
         constexpr int f1 = AlgebraicToSquare('f', '1');
         constexpr int f3 = AlgebraicToSquare('f', '3');
         constexpr int f6 = AlgebraicToSquare('f', '6');
+        constexpr int f8 = AlgebraicToSquare('f', '8');
         constexpr int g1 = AlgebraicToSquare('g', '1');
         constexpr int g6 = AlgebraicToSquare('g', '6');
         constexpr int g7 = AlgebraicToSquare('g', '7');
         constexpr int g8 = AlgebraicToSquare('g', '8');
         constexpr int b1 = AlgebraicToSquare('b', '1');
+        constexpr int b4 = AlgebraicToSquare('b', '4');
         constexpr int b5 = AlgebraicToSquare('b', '5');
         constexpr int b8 = AlgebraicToSquare('b', '8');
 
@@ -214,6 +216,39 @@ namespace Chess
             {c2, c4},   // 2.c4
             {g7, g6},   // 2...g6 - King's Indian setup
             {b1, c3}    // 3.Nc3
+        });
+
+		// Giuoco Piano (Italian Game continuation): 1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 4.c3
+        // Classical setup with strong center control
+        AddBookLine({
+            {e2, e4},   // 1.e4
+            {e7, e5},   // 1...e5
+            {g1, f3},   // 2.Nf3
+            {b8, c6},   // 2...Nc6
+            {f1, c4},   // 3.Bc4
+            {f8, c5},   // 3...Bc5
+            {c2, c3}    // 4.c3 - prepares d4 central thrust
+        });
+
+        // Nimzo-Indian Defense: 1.d4 Nf6 2.c4 e6 3.Nc3 Bb4
+        // Hypermodern defense with piece pressure on center
+        AddBookLine({
+            {d2, d4},   // 1.d4
+            {g8, f6},   // 1...Nf6
+            {c2, c4},   // 2.c4
+            {e7, e6},   // 2...e6
+            {b1, c3},   // 3.Nc3
+            {f1, b4}    // 3...Bb4 - pins knight
+        });
+
+        // Scotch Game: 1.e4 e5 2.Nf3 Nc6 3.d4
+        // Sharp tactical opening with early central tension
+        AddBookLine({
+            {e2, e4},   // 1.e4
+            {e7, e5},   // 1...e5
+            {g1, f3},   // 2.Nf3
+            {b8, c6},   // 2...Nc6
+            {d2, d4}    // 3.d4 - aggressive center break
         });
 
         g_bookInitialized = true;

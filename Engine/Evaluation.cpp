@@ -473,6 +473,45 @@ namespace Chess
         }
     }
 
+// Evaluate piece activity and tactical patterns
+// Bonuses for centralized pieces and active positioning
+int EvaluateTacticalPosition(const Board& board)
+{
+    int score = 0;
+    
+    // Central squares provide strong positional advantage
+    // These bonuses stack with PST values for compound effect
+    constexpr int CENTER_CONTROL_BONUS[64] = {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        0, 10, 15, 15, 15, 15, 10,  0,
+        0, 15, 25, 30, 30, 25, 15,  0,
+        0, 15, 30, 40, 40, 30, 15,  0,
+        0, 15, 30, 40, 40, 30, 15,  0,
+        0, 15, 25, 30, 30, 25, 15,  0,
+        0, 10, 15, 15, 15, 15, 10,  0,
+        0,  0,  0,  0,  0,  0,  0,  0
+    };
+    
+    for (int sq = 0; sq < 64; ++sq)
+    {
+        Piece piece = board.GetPieceAt(sq);
+        if (piece.IsEmpty()) continue;
+        
+        // Apply center bonus for knights and bishops (most benefit from centralization)
+        PieceType type = piece.GetType();
+        if (type == PieceType::Knight || type == PieceType::Bishop)
+        {
+            int bonus = CENTER_CONTROL_BONUS[sq];
+            if (piece.GetColor() == PlayerColor::White)
+                score += bonus;
+            else
+                score -= bonus;
+        }
+    }
+    
+    return score;
+}
+
     // ========== MAIN EVALUATION FUNCTION ==========
 
     // Complete position evaluation combining multiple factors
@@ -521,6 +560,22 @@ namespace Chess
             // Add material and positional value to both scores
             int mgPieceScore = value + mgPST;
             int egPieceScore = value + egPST;
+
+            if (type == PieceType::Queen)
+            {
+                PlayerColor enemyColor = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+                if (IsSquareAttacked(board, sq, enemyColor))
+                {
+                    if (color == PlayerColor::White)
+                    {
+                        mgPieceScore -= 150;
+                    }
+                    else
+                    {
+                        mgPieceScore += 150;
+                    }
+                }
+            }
 
             if (color == PlayerColor::White)
             {
@@ -573,13 +628,19 @@ namespace Chess
         // Reward advanced passed pawns with king support in endgame
         EvaluatePassedPawns(board, mgScore, egScore);
 
-        // 7. TEMPO BONUS
+        // 7. TACTICAL POSITIONING
+        // Reward active piece placement and central control
+        int tacticalScore = EvaluateTacticalPosition(board);
+        mgScore += tacticalScore;
+        egScore += tacticalScore / 2;  // Less important in endgame
+
+        // 8. TEMPO BONUS
         // Small bonus for side to move (having the initiative)
         int tempo = (board.GetSideToMove() == PlayerColor::White) ? 10 : -10;
         mgScore += tempo;
         egScore += tempo;
 
-        // 8. TAPERED EVALUATION
+        // 9. TAPERED EVALUATION
         // Smoothly blend middlegame and endgame scores based on phase
         // phase=256 (opening) → use mgScore, phase=0 (endgame) → use egScore
         int score = (mgScore * phase + egScore * (256 - phase)) / 256;

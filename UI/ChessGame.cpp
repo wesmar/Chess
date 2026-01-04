@@ -3,6 +3,7 @@
 #include "ChessGame.h"
 #include "../Engine/Evaluation.h"
 #include "../Engine/OpeningBook.h"
+#include "../Engine/MoveGenerator.h"
 #include <algorithm>
 #include <random>
 #include <chrono>
@@ -111,7 +112,20 @@ namespace Chess
             int victimValue = PIECE_VALUES[static_cast<int>(victim.GetType())];
             int aggressorValue = PIECE_VALUES[static_cast<int>(aggressor.GetType())];
 
-            return 1000000 + victimValue * 10 - aggressorValue;
+            int score = 1000000 + victimValue * 10 - aggressorValue;
+
+            if (aggressorValue > 400 && victimValue < 200)
+            {
+                PlayerColor opponentColor = (aggressor.GetColor() == PlayerColor::White)
+                                            ? PlayerColor::Black : PlayerColor::White;
+
+                if (MoveGenerator::IsSquareAttacked(board.GetPieces(), move.GetTo(), opponentColor))
+                {
+                    score -= 50000;
+                }
+            }
+
+            return score;
         }
 
         // Good priority: Promotions
@@ -124,10 +138,27 @@ namespace Chess
         if (move == m_killerMoves[ply][0]) return 800000;
         if (move == m_killerMoves[ply][1]) return 700000;
 
-        // History heuristic: use table for the side that is making the move
+		// History heuristic: use table for the side that is making the move
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        return m_history[sideIndex][move.GetFrom()][move.GetTo()];
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()];
+        
+        // Tactical bonus for moves to central squares
+        // Central control is crucial in chess - pieces on central squares
+        // control more of the board and create tactical opportunities
+        int toSquare = move.GetTo();
+        int centerBonus = 0;
+        
+        if (toSquare == 27 || toSquare == 28 || toSquare == 35 || toSquare == 36)
+        {
+            centerBonus = 400;
+        }
+        else if ((toSquare >= 18 && toSquare <= 21) || (toSquare >= 42 && toSquare <= 45))
+        {
+            centerBonus = 150;
+        }
+        
+        return historyScore + centerBonus;
     }
 
     // Sort moves by score for better alpha-beta pruning efficiency
@@ -379,6 +410,33 @@ namespace Chess
             return 0; // Draw score
         }
 
+		// Futility pruning - skip nodes unlikely to raise alpha
+        // In positions far below alpha with little depth remaining, trying to improve
+        // the score is futile. Skip full search and return approximate value.
+        // Only apply when not in check (dangerous positions need full analysis)
+        if (m_difficulty > 6 && depth <= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
+        {
+            int staticEval = Evaluate(board);
+            int futilityMargin = 200 * depth;  // Larger margin for deeper positions
+
+            if (staticEval + futilityMargin <= alpha)
+            {
+                return alpha;  // Position too weak to improve alpha
+            }
+        }
+        
+        // Razoring - reduce depth for positions far above beta
+        // If position evaluation exceeds beta by large margin, opponent likely
+        // has better alternatives earlier in tree. Reduce search depth.
+        if (m_difficulty > 6 && depth <= 2 && !board.IsInCheck(board.GetCurrentPlayer()))
+        {
+            int staticEval = Evaluate(board);
+            if (staticEval - 150 >= beta)
+            {
+                return beta;  // Position too good, opponent won't allow this line
+            }
+        }
+        
         // Probe transposition table for cached result
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
@@ -410,7 +468,7 @@ namespace Chess
 		// In positions with low material (phase < 64), zugzwang is common
 		// and null-move can produce false beta cutoffs
 		int phase = ComputePhase(board);
-		if (depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
 		{
 			const int R = 2;
 			board.MakeNullMoveUnchecked();
@@ -433,6 +491,12 @@ namespace Chess
         uint8_t flag = TT_ALPHA;
 
         bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+
+        if (sideInCheck && ply < MAX_PLY - 1)
+        {
+            depth++;
+        }
+
         int moveIndex = 0;
 
         // Search all legal moves
@@ -448,11 +512,12 @@ namespace Chess
                            !move.IsEnPassant() &&
                            !move.IsCastling();
 
-            // Check if we should apply late move reduction
-            bool applyLMR = depth >= 3 &&
-                            moveIndex >= 4 &&
-                            !sideInCheck &&
-                            isQuiet;
+			// Late Move Reduction - reduce search depth for likely poor moves
+			// Only apply to quiet moves late in move ordering when not in check
+			bool applyLMR = depth >= 4 &&           // Deeper positions only (was 3)
+							moveIndex >= 6 &&        // More moves must be tried first (was 4)
+							!sideInCheck &&         // Don't reduce in tactical positions
+							isQuiet;                // Only for quiet moves
 
             if (applyLMR)
             {
@@ -651,7 +716,7 @@ namespace Chess
 
 		// Null move pruning - disabled in endgames to avoid zugzwang errors
 		int phase = ComputePhase(board);
-		if (depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
 		{
 			const int R = 2;
 			board.MakeNullMoveUnchecked();
@@ -674,6 +739,12 @@ namespace Chess
         uint8_t flag = TT_ALPHA;
 
         bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+
+        if (sideInCheck && ply < MAX_PLY - 1)
+        {
+            depth++;
+        }
+
         int moveIndex = 0;
 
         for (const auto& move : moves)
@@ -841,7 +912,21 @@ namespace Chess
             Piece aggressor = board.GetPieceAt(move.GetFrom());
             int victimValue = PIECE_VALUES[static_cast<int>(victim.GetType())];
             int aggressorValue = PIECE_VALUES[static_cast<int>(aggressor.GetType())];
-            return 1000000 + victimValue * 10 - aggressorValue;
+
+            int score = 1000000 + victimValue * 10 - aggressorValue;
+
+            if (aggressorValue > 400 && victimValue < 200)
+            {
+                PlayerColor opponentColor = (aggressor.GetColor() == PlayerColor::White)
+                                            ? PlayerColor::Black : PlayerColor::White;
+
+                if (MoveGenerator::IsSquareAttacked(board.GetPieces(), move.GetTo(), opponentColor))
+                {
+                    score -= 50000;
+                }
+            }
+
+            return score;
         }
 
         if (move.IsPromotion()) return 900000;
@@ -880,6 +965,17 @@ namespace Chess
                 int victimValue = PIECE_VALUES[static_cast<int>(victim.GetType())];
                 int aggressorValue = PIECE_VALUES[static_cast<int>(aggressor.GetType())];
                 score = 1000000 + victimValue * 10 - aggressorValue;
+
+                if (aggressorValue > 400 && victimValue < 200)
+                {
+                    PlayerColor opponentColor = (aggressor.GetColor() == PlayerColor::White)
+                                                ? PlayerColor::Black : PlayerColor::White;
+
+                    if (MoveGenerator::IsSquareAttacked(board.GetPieces(), move.GetTo(), opponentColor))
+                    {
+                        score -= 50000;
+                    }
+                }
             }
             // Good priority: Promotions
             else if (move.IsPromotion())
@@ -935,7 +1031,7 @@ namespace Chess
 
 		// Null move pruning - disabled in endgames to avoid zugzwang errors
 		int phase = ComputePhase(board);
-		if (depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
 		{
 			const int R = 2;
 			board.MakeNullMoveUnchecked();
@@ -955,6 +1051,12 @@ namespace Chess
         uint8_t flag = TT_ALPHA;
 
         bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+
+        if (sideInCheck && ply < MAX_PLY - 1)
+        {
+            depth++;
+        }
+
         int moveIndex = 0;
 
         for (const auto& move : moves)
