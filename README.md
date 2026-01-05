@@ -299,7 +299,7 @@ Please keep changes focused and well-documented!
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/wesmar/Chess/blob/main/LICENSE.md) file for details.
 
 ## Acknowledgments
 
