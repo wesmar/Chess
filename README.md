@@ -269,7 +269,7 @@ DarkSquare=70,80,100
 
 ## Challenge
 
-**Can you beat difficulty level 3?** If you can consistently win at level 3, you're playing at a decent amateur level. Levels 7+ are quite challenging! 🏆
+**Can you beat difficulty level 3?** If you can consistently win at level 3, you're playing at a decent amateur level. 🏆
 
 ## FAQ
 
@@ -286,7 +286,7 @@ A: Absolutely! That's the point. The code is well-commented and structured for l
 A: The code uses Windows 10+ APIs, but could be adapted for older systems with minor changes to the WinAPI calls.
 
 **Q: Why not use a UCI protocol?**  
-A: UCI adds complexity for engine-GUI communication. This is a standalone application focused on being self-contained and educational.
+A: The project includes both! There's a UCI console engine (`ChessEngineUCI.exe`) that works with Arena and other GUIs, plus the main standalone WinAPI application. The standalone version is the focus since it's more educational and shows the complete implementation, but advanced users can compile the UCI version to use the engine with their favorite chess GUI.
 
 ## Contributing
 
