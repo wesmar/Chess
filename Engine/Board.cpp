@@ -1,4 +1,24 @@
 // Board.cpp
+// Chess board representation and game state management
+//
+// This module implements the core chess board logic including:
+// - Board state representation (64-square array + metadata)
+// - Move execution (make/undo with full state restoration)
+// - FEN parsing and generation (Forsyth-Edwards Notation)
+// - Legal move generation and validation
+// - Game state detection (checkmate, stalemate, draw)
+// - Incremental evaluation maintenance (material + PST)
+// - Zobrist hashing for transposition detection
+//
+// Performance optimizations:
+// - Piece lists for fast iteration over pieces
+// - Incremental Zobrist hash updates (XOR operations)
+// - Incremental score updates (add/subtract deltas)
+// - Move history stack for undo without copying board
+//
+// The Board class maintains full game state needed for UCI protocol compliance
+// and efficient search tree traversal in the chess engine.
+
 #include "Board.h"
 #include "Zobrist.h"
 #include "Evaluation.h"
@@ -10,16 +30,16 @@
 
 namespace Chess
 {
-    // ---------- Board Implementation ----------
-    
-    // Default constructor - initializes Zobrist hashing and sets up starting position
+    // Default constructor - initialize board to starting position
+    // Also ensures Zobrist hash keys are initialized globally
     Board::Board()
     {
         Zobrist::Initialize();
         ResetToStartingPosition();
     }
 
-    // Construct board from FEN string
+    // Constructor from FEN string
+    // If FEN parsing fails, falls back to starting position
     Board::Board(const std::string& fen)
     {
         Zobrist::Initialize();
@@ -35,7 +55,11 @@ namespace Chess
         LoadFEN(Positions::STARTING_POSITION);
     }
 
-    // Load board state from FEN notation
+    // Load position from FEN string
+    // FEN (Forsyth-Edwards Notation) is standard format for chess positions
+    // Example: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    //
+    // After loading, recomputes derived state (Zobrist key, incremental score)
     bool Board::LoadFEN(const std::string& fen)
     {
         bool result = FENParser::Parse(fen, *this);
@@ -47,18 +71,24 @@ namespace Chess
         return result;
     }
 
-    // Export current board state as FEN string
+    // Generate FEN string from current position
+    // Useful for position export, debugging, and UCI protocol
     std::string Board::GetFEN() const
     {
         return FENParser::Generate(*this);
     }
 
-    // Recalculate Zobrist hash from scratch (used after FEN load)
+    // Recompute Zobrist hash from scratch
+    // Called after FEN loading or when hash may be corrupted
+    //
+    // Zobrist hashing: XOR together random numbers for each piece/square
+    // This creates a unique 64-bit fingerprint of the position
+    // Hash is incrementally updated during moves (much faster than recomputing)
     void Board::RecomputeZobristKey()
     {
         m_zobristKey = 0;
 
-        // XOR all pieces into hash
+        // XOR in piece positions
         for (int sq = 0; sq < SQUARE_COUNT; ++sq)
         {
             Piece piece = m_board[sq];
@@ -70,13 +100,13 @@ namespace Chess
             }
         }
 
-        // XOR side to move (only if black)
+        // XOR in side to move
         if (m_sideToMove == PlayerColor::Black)
         {
             m_zobristKey ^= Zobrist::sideToMoveKey;
         }
 
-        // XOR castling rights
+        // XOR in castling rights
         for (int i = 0; i < 4; ++i)
         {
             if (m_castlingRights[i])
@@ -85,7 +115,7 @@ namespace Chess
             }
         }
 
-        // XOR en passant file if applicable
+        // XOR in en passant file (if applicable)
         if (m_enPassantSquare >= 0)
         {
             int epFile = m_enPassantSquare % 8;
@@ -93,25 +123,28 @@ namespace Chess
         }
     }
 
-    // Update incremental score by adding or removing a piece
-    // Uses global evaluation functions to ensure consistency between Board and Evaluation
+    // Update incremental score when piece is added/removed
+    // Incremental score = material + PST values
+    //
+    // This is much faster than recomputing full evaluation every time
+    // Only material and PST are maintained incrementally; other eval terms
+    // (mobility, king safety, etc.) are computed on-demand during search
     void Board::UpdateIncrementalScore(int square, Piece piece, bool add)
     {
         if (piece.IsEmpty()) return;
 
-        // Use global helpers from Evaluation.h to ensure consistency
         int value = GetPieceValue(piece.GetType());
         int pstValue = GetPSTValue(piece.GetType(), square, piece.GetColor());
 
         int score = value + pstValue;
 
-        // Score is tracked from White's perspective
-        // White pieces add, Black pieces subtract
+        // Negate score for Black pieces (evaluation is from White's perspective)
         if (piece.GetColor() == PlayerColor::Black)
         {
             score = -score;
         }
 
+        // Add or subtract score delta
         if (add)
         {
             m_incrementalScore += score;
@@ -123,6 +156,7 @@ namespace Chess
     }
 
     // Recompute incremental score from scratch
+    // Called after FEN loading or when score may be corrupted
     void Board::RecomputeIncrementalScore()
     {
         m_incrementalScore = 0;
@@ -136,12 +170,23 @@ namespace Chess
         }
     }
 
-    // Generate all legal moves for current position
+    // Generate all legal moves in current position
+    // Legal moves = pseudo-legal moves that don't leave king in check
+    //
+    // Process:
+    // 1. Generate all pseudo-legal moves (follow piece movement rules)
+    // 2. For each move, make it temporarily
+    // 3. Check if our king is in check after the move
+    // 4. If not in check, move is legal
+    // 5. Undo the temporary move
+    //
+    // This is the definitive legal move list used for game rules enforcement
     std::vector<Move> Board::GenerateLegalMoves() const
     {
+        // Create temporary board for move validation
         Board temp = *this;
 
-        // First generate pseudo-legal moves
+        // Generate pseudo-legal moves using move generator
         std::vector<Move> moves = MoveGenerator::GeneratePseudoLegalMoves(
             temp.m_board,
             temp.m_sideToMove,
@@ -154,7 +199,7 @@ namespace Chess
         legalMoves.reserve(moves.size());
 
         const PlayerColor movedColor = temp.m_sideToMove;
-        const PlayerColor opponentColor = 
+        const PlayerColor opponentColor =
             (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
 
         // Filter out moves that leave king in check
@@ -163,8 +208,8 @@ namespace Chess
             temp.MakeMoveUnchecked(move);
 
             int kingSquare = temp.m_kingSquares[static_cast<int>(movedColor)];
-            
-            // Verify king exists and is not under attack
+
+            // Move is legal if king is not in check after making it
             if (kingSquare != -1 &&
                 !MoveGenerator::IsSquareAttacked(temp.m_board, kingSquare, opponentColor))
             {
@@ -178,6 +223,10 @@ namespace Chess
     }
 
     // Check if a specific move is legal in current position
+    // Used for validating user input and UCI move strings
+    //
+    // This generates all legal moves and searches for matching move
+    // Could be optimized by generating only moves from source square
     bool Board::IsMoveLegal(const Move& move) const
     {
         auto moves = GenerateLegalMoves();
@@ -192,10 +241,20 @@ namespace Chess
         );
     }
 
-    // Execute move without legality check (updates board state and Zobrist hash)
+    // Make a move without legality checking (unchecked version)
+    // Used internally during search where move legality is known
+    //
+    // This is the core move execution function - handles all special cases:
+    // - Captures (remove captured piece)
+    // - Castling (move rook)
+    // - En passant (remove captured pawn)
+    // - Promotion (replace pawn with promoted piece)
+    //
+    // All state changes are recorded in MoveRecord for perfect undo
+    // Zobrist hash and incremental score are updated incrementally
     bool Board::MakeMoveUnchecked(const Move& move)
     {
-        // Save complete board state for undo
+        // Create move record for undo functionality
         MoveRecord record;
         record.move = move;
         record.capturedPiece = m_board[move.GetTo()];
@@ -212,13 +271,13 @@ namespace Chess
         const int to = move.GetTo();
         Piece movedPiece = m_board[from];
 
-        // Remove piece from source square in Zobrist hash
+        // Remove moved piece from source square (Zobrist)
         m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(movedPiece.GetType())][static_cast<int>(movedPiece.GetColor())][from];
 
-        // Update incremental score: remove piece from old square
+        // Remove moved piece from source square (incremental score)
         UpdateIncrementalScore(from, movedPiece, false);
 
-        // Remove captured piece from Zobrist hash and incremental score
+        // Handle capture - remove captured piece
         if (!m_board[to].IsEmpty())
         {
             Piece capturedPiece = m_board[to];
@@ -227,14 +286,15 @@ namespace Chess
             m_pieceLists[static_cast<int>(capturedPiece.GetColor())].Remove(to);
         }
 
-        // Remove old en passant from hash
+        // Update Zobrist hash for en passant change
         if (m_enPassantSquare >= 0)
         {
             int oldEpFile = m_enPassantSquare % 8;
             m_zobristKey ^= Zobrist::enPassantKeys[oldEpFile];
         }
 
-        // Remove old castling rights from hash
+        // Update Zobrist hash for castling rights change
+        // Must XOR out old rights before updating
         for (int i = 0; i < 4; ++i)
         {
             if (m_castlingRights[i])
@@ -243,10 +303,10 @@ namespace Chess
             }
         }
 
-        // Update castling rights based on move
+        // Update castling rights based on moved piece/squares
         UpdateCastlingRights(move.GetFrom(), move.GetTo(), m_board[move.GetFrom()]);
 
-        // Add new castling rights to hash
+        // XOR in new castling rights
         for (int i = 0; i < 4; ++i)
         {
             if (m_castlingRights[i])
@@ -255,7 +315,7 @@ namespace Chess
             }
         }
 
-        // Prepare castling rook data before moving pieces
+        // Handle castling - need to move rook as well
         int castlingRookFrom = -1;
         int castlingRookTo = -1;
         Piece castlingRook = EMPTY_PIECE;
@@ -264,56 +324,57 @@ namespace Chess
         {
             int row = (m_sideToMove == PlayerColor::White) ? 0 : 7;
 
-            // Determine rook positions for kingside vs queenside castling
-            if (move.GetTo() % 8 == 6) // Kingside
+            // Kingside castling (O-O)
+            if (move.GetTo() % 8 == 6)
             {
                 castlingRookFrom = CoordinateToIndex(7, row);
                 castlingRookTo = CoordinateToIndex(5, row);
             }
-            else // Queenside
+            // Queenside castling (O-O-O)
+            else
             {
                 castlingRookFrom = CoordinateToIndex(0, row);
                 castlingRookTo = CoordinateToIndex(3, row);
             }
-            
+
             castlingRook = m_board[castlingRookFrom];
-            
-            // Remove rook from starting square in Zobrist hash
+
+            // Remove rook from old position (Zobrist)
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(castlingRook.GetType())][static_cast<int>(castlingRook.GetColor())][castlingRookFrom];
         }
 
-        // Handle special moves (en passant, castling)
+        // Execute special moves (en passant, castling)
         HandleEnPassant(move);
         HandleCastling(move);
 
-        // Execute the actual piece movement
+        // Move piece to destination square
         m_board[move.GetTo()] = m_board[move.GetFrom()];
         m_board[move.GetFrom()] = EMPTY_PIECE;
         m_board[move.GetTo()].SetMoved(true);
 
-        // Handle pawn promotion
+        // Handle promotion - replace pawn with promoted piece
         if (move.IsPromotion())
         {
             m_board[move.GetTo()] = Piece(move.GetPromotion(), m_sideToMove, true);
         }
 
-        // Add piece to destination square in Zobrist hash (after promotion)
+        // Add piece to destination square (Zobrist)
         Piece finalPiece = m_board[to];
         m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(finalPiece.GetType())][static_cast<int>(finalPiece.GetColor())][to];
 
-        // Update incremental score: add piece to new square
+        // Add piece to destination square (incremental score)
         UpdateIncrementalScore(to, finalPiece, true);
 
         // Update piece list
         m_pieceLists[static_cast<int>(m_sideToMove)].Update(from, to);
 
-        // Update king position if king was moved
+        // Update king square tracking if king moved
         if (m_board[move.GetTo()].GetType() == PieceType::King)
         {
             UpdateKingSquare(m_sideToMove, move.GetTo());
         }
 
-        // Add rook to destination square in Zobrist hash (castling)
+        // Complete castling rook move
         if (move.IsCastling())
         {
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(castlingRook.GetType())][static_cast<int>(castlingRook.GetColor())][castlingRookTo];
@@ -322,7 +383,7 @@ namespace Chess
             m_pieceLists[static_cast<int>(m_sideToMove)].Update(castlingRookFrom, castlingRookTo);
         }
 
-        // Handle en passant capture in Zobrist hash and incremental score
+        // Complete en passant capture (remove captured pawn)
         if (move.IsEnPassant())
         {
             int capturedPawnSquare = to + ((m_sideToMove == PlayerColor::White) ? -8 : 8);
@@ -332,13 +393,12 @@ namespace Chess
             m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Remove(capturedPawnSquare);
         }
 
-        // Update en passant square for next move
+        // Set new en passant square if pawn moved two squares
         m_enPassantSquare = -1;
         if (m_board[move.GetTo()].GetType() == PieceType::Pawn)
         {
             int delta = move.GetTo() - move.GetFrom();
-            // Double pawn push creates en passant opportunity
-            if (std::abs(delta) == 16)
+            if (std::abs(delta) == 16) // Two-square pawn move
             {
                 m_enPassantSquare = move.GetFrom() + delta / 2;
                 int newEpFile = m_enPassantSquare % 8;
@@ -350,28 +410,34 @@ namespace Chess
         m_halfMoveClock++;
         if (move.IsCapture() || m_board[move.GetTo()].GetType() == PieceType::Pawn)
         {
-            m_halfMoveClock = 0; // Reset on pawn move or capture
+            m_halfMoveClock = 0; // Reset on capture or pawn move
         }
 
-        // Increment full move number after black moves
+        // Update move counters
         if (m_sideToMove == PlayerColor::Black)
         {
             m_fullMoveNumber++;
         }
 
-        // Flip side to move in Zobrist hash
+        // Update side to move (Zobrist)
         m_zobristKey ^= Zobrist::sideToMoveKey;
 
-        // Switch active player
+        // Switch sides
         m_sideToMove = (m_sideToMove == PlayerColor::White)
             ? PlayerColor::Black
             : PlayerColor::White;
 
-        m_moveHistory.push_back(record);
+        // Save move record for undo
+        m_moveHistory[m_historyPly++] = record;
         return true;
     }
-
-    // Execute move with legality check
+	
+	// Make a move with legality checking
+    // This is the public interface for making moves (used by UI/game logic)
+    // Returns false if move is illegal
+    //
+    // Internally calls IsMoveLegal() then MakeMoveUnchecked()
+    // The unchecked version is faster but requires caller to ensure legality
     bool Board::MakeMove(const Move& move)
     {
         if (!IsMoveLegal(move))
@@ -382,18 +448,33 @@ namespace Chess
         return MakeMoveUnchecked(move);
     }
 
-    // Undo last move and restore previous board state
+    // Undo the last move made
+    // Restores complete board state from move history record
+    //
+    // This is perfect undo - all state is restored exactly:
+    // - Piece positions
+    // - Captured pieces
+    // - Castling rights
+    // - En passant square
+    // - King positions
+    // - Zobrist hash
+    // - Incremental score
+    // - Move counters
+    //
+    // Used for:
+    // - Search tree traversal (make/undo millions of moves)
+    // - User undo functionality
+    // - Move validation
     bool Board::UndoMove()
     {
-        if (m_moveHistory.empty())
+        if (m_historyPly == 0)
         {
-            return false;
+            return false; // No moves to undo
         }
 
-        MoveRecord record = m_moveHistory.back();
-        m_moveHistory.pop_back();
+        MoveRecord record = m_moveHistory[--m_historyPly];
 
-        // Restore side to move
+        // Switch side back
         m_sideToMove = (m_sideToMove == PlayerColor::White)
             ? PlayerColor::Black
             : PlayerColor::White;
@@ -401,23 +482,22 @@ namespace Chess
         const int from = record.move.GetFrom();
         const int to = record.move.GetTo();
 
-        // Update piece list: move piece back to original square
+        // Update piece list (reverse the move)
         m_pieceLists[static_cast<int>(m_sideToMove)].Update(to, from);
 
-        // If there was a captured piece, restore it to piece list
+        // Restore captured piece to piece list
         if (!record.capturedPiece.IsEmpty())
         {
             m_pieceLists[static_cast<int>(record.capturedPiece.GetColor())].Add(to);
         }
 
-        // Restore pieces to original positions
+        // Restore piece positions
         m_board[record.move.GetFrom()] = record.movedPiece;
         m_board[record.move.GetTo()] = record.capturedPiece;
 
-		// Restore special move states
+        // Handle en passant undo - restore captured pawn
         if (record.move.IsEnPassant())
         {
-            // Restore captured pawn to its original square
             int captureSquare = (m_sideToMove == PlayerColor::White)
                 ? record.move.GetTo() - 8
                 : record.move.GetTo() + 8;
@@ -426,29 +506,31 @@ namespace Chess
             m_board[captureSquare] = capturedPawn;
             m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Add(captureSquare);
         }
+        // Handle castling undo - move rook back
         else if (record.move.IsCastling())
         {
-            // Restore rook to original position
             int rookFrom, rookTo;
             int row = (m_sideToMove == PlayerColor::White) ? 0 : 7;
 
-            if (record.move.GetTo() % 8 == 6)  // Kingside castling
+            // Determine rook squares based on castling type
+            if (record.move.GetTo() % 8 == 6) // Kingside
             {
-                rookFrom = CoordinateToIndex(5, row);  // Rook currently on f-file
-                rookTo = CoordinateToIndex(7, row);    // Move back to h-file
+                rookFrom = CoordinateToIndex(5, row);
+                rookTo = CoordinateToIndex(7, row);
             }
-            else  // Queenside castling
+            else // Queenside
             {
-                rookFrom = CoordinateToIndex(3, row);  // Rook currently on d-file
-                rookTo = CoordinateToIndex(0, row);    // Move back to a-file
+                rookFrom = CoordinateToIndex(3, row);
+                rookTo = CoordinateToIndex(0, row);
             }
 
+            // Move rook back to original square
             m_board[rookTo] = m_board[rookFrom];
             m_board[rookFrom] = EMPTY_PIECE;
             m_pieceLists[static_cast<int>(m_sideToMove)].Update(rookFrom, rookTo);
         }
 
-        // Restore all board state variables
+        // Restore all game state from move record
         m_enPassantSquare = record.previousEnPassant;
         m_castlingRights = record.previousCastlingRights;
         m_halfMoveClock = record.previousHalfMoveClock;
@@ -457,7 +539,7 @@ namespace Chess
         m_zobristKey = record.previousZobristKey;
         m_incrementalScore = record.previousIncrementalScore;
 
-        // Decrement full move number if undoing black's move
+        // Update full move counter
         if (m_sideToMove == PlayerColor::Black)
         {
             m_fullMoveNumber--;
@@ -466,14 +548,25 @@ namespace Chess
         return true;
     }
 
-    // Execute null move (pass turn to opponent without moving)
+    // Make a null move (pass turn without moving)
+    // Used in null move pruning search technique
+    //
+    // Null move pruning: if position is so good that even passing the turn
+    // still results in beta cutoff, we can skip searching this branch
+    //
+    // Null move only changes:
+    // - Side to move
+    // - En passant square (cleared)
+    // - Zobrist hash
+    //
+    // Piece positions and other state unchanged
     bool Board::MakeNullMoveUnchecked()
     {
         NullMoveRecord record;
         record.previousEnPassant = m_enPassantSquare;
         record.previousZobristKey = m_zobristKey;
 
-        // Remove old en passant from hash
+        // Clear en passant (passing turn forfeits en passant right)
         if (m_enPassantSquare >= 0)
         {
             int oldEpFile = m_enPassantSquare % 8;
@@ -481,80 +574,96 @@ namespace Chess
             m_enPassantSquare = -1;
         }
 
-        // Toggle side to move in Zobrist hash
+        // Toggle side to move
         m_zobristKey ^= Zobrist::sideToMoveKey;
 
-        // Switch active player
         m_sideToMove = (m_sideToMove == PlayerColor::White)
             ? PlayerColor::Black
             : PlayerColor::White;
 
-        m_nullMoveHistory.push_back(record);
+        // Save null move record for undo
+        m_nullMoveHistory[m_nullMovePly++] = record;
         return true;
     }
 
-    // Undo null move and restore previous board state
+    // Undo null move
+    // Restores state before null move was made
     bool Board::UndoNullMove()
     {
-        if (m_nullMoveHistory.empty())
+        if (m_nullMovePly == 0)
         {
-            return false;
+            return false; // No null moves to undo
         }
 
-        NullMoveRecord record = m_nullMoveHistory.back();
-        m_nullMoveHistory.pop_back();
+        NullMoveRecord record = m_nullMoveHistory[--m_nullMovePly];
 
         // Restore side to move
         m_sideToMove = (m_sideToMove == PlayerColor::White)
             ? PlayerColor::Black
             : PlayerColor::White;
 
-        // Restore en passant and Zobrist key
+        // Restore en passant and Zobrist hash
         m_enPassantSquare = record.previousEnPassant;
         m_zobristKey = record.previousZobristKey;
 
         return true;
     }
 
-	// Count how many times current position has occurred (for threefold repetition)
-	int Board::CountRepetitions() const
-	{
-		int count = 1;
-		// Keep the current key constant to compare against history
-		const uint64_t targetKey = m_zobristKey;
+    // Count how many times current position has occurred in game history
+    // Used for threefold repetition draw detection
+    //
+    // Searches backward through move history comparing Zobrist keys
+    // Stops at irreversible moves (capture, pawn move, promotion) since
+    // these prevent position from recurring
+    //
+    // Returns: number of times this position occurred (including current)
+    int Board::CountRepetitions() const
+    {
+        int count = 1; // Current position counts as first occurrence
+        const uint64_t targetKey = m_zobristKey;
 
-		// Search backwards through move history
-		for (int i = static_cast<int>(m_moveHistory.size()) - 1; i >= 0; --i)
-		{
-			const auto& record = m_moveHistory[i];
-			
-			// Stop at irreversible moves (captures, pawn moves, promotions)
-			if (record.move.IsCapture() || 
-				record.move.IsPromotion() || 
-				record.movedPiece.GetType() == PieceType::Pawn)
-			{
-				break;
-			}
+        // Search backward through move history
+        for (int i = m_historyPly - 1; i >= 0; --i)
+        {
+            const auto& record = m_moveHistory[i];
 
-			// Check if this historical position matches the current position
-			if (record.previousZobristKey == targetKey)
-			{
-				count++;
-			}
-		}
-		
-		return count;
-	}
+            // Stop at irreversible moves (these create a new "game tree")
+            if (record.move.IsCapture() ||
+                record.move.IsPromotion() ||
+                record.movedPiece.GetType() == PieceType::Pawn)
+            {
+                break; // Can't repeat position before irreversible move
+            }
 
-    // Check for insufficient material to checkmate
+            // Check if position before this move matches current position
+            if (record.previousZobristKey == targetKey)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    // Check if position has insufficient material for checkmate
+    // Used for automatic draw detection
+    //
+    // Insufficient material cases (cannot force checkmate):
+    // - K vs K (bare kings)
+    // - K+N vs K (king and knight vs king)
+    // - K+B vs K (king and bishop vs king)
+    // - K+B vs K+B (bishops on same color)
+    //
+    // Even with best play, these positions cannot result in checkmate
     bool Board::IsInsufficientMaterial() const
     {
+        // Count all pieces
         int whitePawns = 0, blackPawns = 0;
         int whiteKnights = 0, blackKnights = 0;
         int whiteBishops = 0, blackBishops = 0;
         int whiteRooks = 0, blackRooks = 0;
         int whiteQueens = 0, blackQueens = 0;
-        int whiteBishopColor = -1, blackBishopColor = -1;
+        int whiteBishopColor = -1, blackBishopColor = -1; // Square color of bishop
 
         for (int sq = 0; sq < 64; ++sq)
         {
@@ -575,7 +684,7 @@ namespace Chess
             case PieceType::Bishop:
                 if (isWhite) {
                     whiteBishops++;
-                    whiteBishopColor = (sq + sq / 8) % 2;
+                    whiteBishopColor = (sq + sq / 8) % 2; // Light or dark square
                 } else {
                     blackBishops++;
                     blackBishopColor = (sq + sq / 8) % 2;
@@ -592,7 +701,7 @@ namespace Chess
             }
         }
 
-        // Any pawns, rooks, or queens = sufficient material
+        // Any pawns, rooks, or queens means checkmate is possible
         if (whitePawns || blackPawns) return false;
         if (whiteRooks || blackRooks) return false;
         if (whiteQueens || blackQueens) return false;
@@ -608,6 +717,7 @@ namespace Chess
         if (whitePieces == 1 && blackPieces == 0) return true;
 
         // K+B vs K+B (same color bishops)
+        // Bishops on same color cannot force checkmate
         if (whiteBishops == 1 && blackBishops == 1 &&
             whiteKnights == 0 && blackKnights == 0 &&
             whiteBishopColor == blackBishopColor)
@@ -618,58 +728,70 @@ namespace Chess
         return false;
     }
 
-    // Determine current game state (playing, check, checkmate, stalemate, draw)
+    // Get current game state (playing, check, checkmate, stalemate, draw)
+    // This is the primary function for determining game status
+    //
+    // Decision tree:
+    // 1. Generate legal moves
+    // 2. If no legal moves:
+    //    - In check → Checkmate
+    //    - Not in check → Stalemate
+    // 3. If legal moves exist:
+    //    - In check → Check (game continues)
+    //    - Three repetitions → Draw
+    //    - Fifty moves without progress → Draw
+    //    - Insufficient material → Draw
+    //    - Otherwise → Playing
     GameState Board::GetGameState() const
     {
         auto moves = GenerateLegalMoves();
-        
-        // No legal moves available
+
+        // No legal moves - either checkmate or stalemate
         if (moves.empty())
         {
             if (IsInCheck(m_sideToMove))
             {
-                return GameState::Checkmate;
+                return GameState::Checkmate; // In check and can't move
             }
             else
             {
-                return GameState::Stalemate;
+                return GameState::Stalemate; // Not in check but can't move
             }
         }
 
-        // Check for check
+        // Legal moves exist - check other conditions
         if (IsInCheck(m_sideToMove))
         {
-            return GameState::Check;
+            return GameState::Check; // In check but has legal moves (game continues)
         }
 
-        // Check for threefold repetition
+        // Check draw conditions
         if (CountRepetitions() >= 3)
         {
-            return GameState::Draw;
+            return GameState::Draw; // Threefold repetition
         }
 
-        // Check for fifty-move rule
-        if (m_halfMoveClock >= 100) // 100 half-moves = 50 full moves
+        if (m_halfMoveClock >= 100)
         {
-            return GameState::Draw;
+            return GameState::Draw; // Fifty-move rule (100 half-moves = 50 full moves)
         }
 
-        // Check for insufficient material
         if (IsInsufficientMaterial())
         {
-            return GameState::Draw;
+            return GameState::Draw; // Cannot force checkmate
         }
 
-        return GameState::Playing;
+        return GameState::Playing; // Game continues normally
     }
 
-    // Check if specified color's king is under attack
+    // Check if specified side is in check
+    // King is in check if opponent pieces attack its square
     bool Board::IsInCheck(PlayerColor color) const
     {
         int kingSquare = m_kingSquares[static_cast<int>(color)];
-        if (kingSquare == -1) return false;
-        
-        return IsSquareAttacked(kingSquare, 
+        if (kingSquare == -1) return false; // No king (shouldn't happen)
+
+        return IsSquareAttacked(kingSquare,
             (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
     }
 
@@ -685,22 +807,29 @@ namespace Chess
         return GetGameState() == GameState::Stalemate;
     }
 
-    // Check if current position is a draw
+    // Check if game is drawn
     bool Board::IsDraw() const
     {
         return GetGameState() == GameState::Draw;
     }
 
-    // Update stored king position after king move
+    // Update king square tracking
+    // Called when king moves to maintain fast king position lookup
     void Board::UpdateKingSquare(PlayerColor color, int newSquare)
     {
         m_kingSquares[static_cast<int>(color)] = newSquare;
     }
 
-    // Update castling rights based on piece movement
+    // Update castling rights based on move
+    // Castling rights are lost when:
+    // - King moves (loses both sides)
+    // - Rook moves from starting square (loses that side)
+    // - Rook is captured on starting square (loses that side)
+    //
+    // Castling rights array: [White KS, White QS, Black KS, Black QS]
     void Board::UpdateCastlingRights(int movedFrom, int movedTo, Piece movedPiece)
     {
-        // King move removes all castling rights for that color
+        // King move - lose all castling rights for that color
         if (movedPiece.GetType() == PieceType::King)
         {
             int colorIndex = static_cast<int>(movedPiece.GetColor()) * 2;
@@ -709,50 +838,53 @@ namespace Chess
             return;
         }
 
-        // Rook move removes castling right for that side
+        // Rook move - lose castling right for that side
         if (movedPiece.GetType() == PieceType::Rook)
         {
             PlayerColor color = movedPiece.GetColor();
 
             if (color == PlayerColor::White)
             {
-                if (movedFrom == 0)        // a1 rook
-                    m_castlingRights[1] = false; // White queenside
-                else if (movedFrom == 7)   // h1 rook
-                    m_castlingRights[0] = false; // White kingside
+                if (movedFrom == 0)      // a1 rook moved
+                    m_castlingRights[1] = false; // Lose queenside
+                else if (movedFrom == 7) // h1 rook moved
+                    m_castlingRights[0] = false; // Lose kingside
             }
-            else
+            else // Black
             {
-                if (movedFrom == 56)       // a8 rook
-                    m_castlingRights[3] = false; // Black queenside
-                else if (movedFrom == 63)  // h8 rook
-                    m_castlingRights[2] = false; // Black kingside
+                if (movedFrom == 56)     // a8 rook moved
+                    m_castlingRights[3] = false; // Lose queenside
+                else if (movedFrom == 63) // h8 rook moved
+                    m_castlingRights[2] = false; // Lose kingside
             }
         }
 
-        // Rook capture removes castling right for captured rook
-        if (movedTo == 0)
-            m_castlingRights[1] = false;  // White queenside
-        else if (movedTo == 7)
-            m_castlingRights[0] = false;  // White kingside
-        else if (movedTo == 56)
-            m_castlingRights[3] = false;  // Black queenside
-        else if (movedTo == 63)
-            m_castlingRights[2] = false;  // Black kingside
+        // Rook captured - lose castling right for that side
+        // Check if destination square is a rook starting position
+        if (movedTo == 0)       // a1 captured
+            m_castlingRights[1] = false;
+        else if (movedTo == 7)  // h1 captured
+            m_castlingRights[0] = false;
+        else if (movedTo == 56) // a8 captured
+            m_castlingRights[3] = false;
+        else if (movedTo == 63) // h8 captured
+            m_castlingRights[2] = false;
     }
 
-    // Execute en passant capture (remove captured pawn)
+    // Execute en passant capture
+    // Remove the captured pawn (which is not on the destination square)
     void Board::HandleEnPassant(const Move& move)
     {
         if (move.IsEnPassant())
         {
-            // Calculate captured pawn position
+            // Calculate captured pawn position (behind destination square)
             int capturedPawnSquare = move.GetTo() + ((m_sideToMove == PlayerColor::White) ? -8 : 8);
             m_board[capturedPawnSquare] = EMPTY_PIECE;
         }
     }
 
-    // Execute castling (move rook to correct position)
+    // Execute castling rook move
+    // King is moved by normal move execution, this handles the rook
     void Board::HandleCastling(const Move& move)
     {
         if (!move.IsCastling())
@@ -761,15 +893,16 @@ namespace Chess
         int rookFrom, rookTo;
         int row = (m_sideToMove == PlayerColor::White) ? 0 : 7;
 
-        if (move.GetTo() % 8 == 6) // Kingside castling
+        // Determine rook squares based on castling type
+        if (move.GetTo() % 8 == 6) // Kingside castling (king to g-file)
         {
-            rookFrom = CoordinateToIndex(7, row); // h-file
-            rookTo = CoordinateToIndex(5, row);   // f-file
+            rookFrom = CoordinateToIndex(7, row); // Rook from h-file
+            rookTo = CoordinateToIndex(5, row);   // Rook to f-file
         }
-        else // Queenside castling
+        else // Queenside castling (king to c-file)
         {
-            rookFrom = CoordinateToIndex(0, row); // a-file
-            rookTo = CoordinateToIndex(3, row);   // d-file
+            rookFrom = CoordinateToIndex(0, row); // Rook from a-file
+            rookTo = CoordinateToIndex(3, row);   // Rook to d-file
         }
 
         // Move the rook
@@ -777,59 +910,80 @@ namespace Chess
         m_board[rookFrom] = EMPTY_PIECE;
         m_board[rookTo].SetMoved(true);
     }
-
-    // Check if making a move would leave own king in check (used for move legality)
+	
+	// Check if a move would leave king in check (used for move validation)
+    // Creates temporary board, makes move, checks if king is in check
+    //
+    // This is a helper function - not typically used in hot paths
+    // Legal move generation uses similar logic but optimized for batch processing
     bool Board::WouldMoveCauseCheck(const Move& move) const
     {
-        // Create a temporary board to test the move
         Board tempBoard = *this;
-        
-        // Temporarily make the move
+
         Piece movedPiece = tempBoard.m_board[move.GetFrom()];
         Piece capturedPiece = tempBoard.m_board[move.GetTo()];
-        
-        // Handle en passant capture
+
+        // Handle en passant - remove captured pawn
         if (move.IsEnPassant())
         {
             int capturedPawnSquare = move.GetTo() + ((m_sideToMove == PlayerColor::White) ? -8 : 8);
             tempBoard.m_board[capturedPawnSquare] = EMPTY_PIECE;
         }
-        
-        // Move the piece
+
+        // Execute move on temporary board
         tempBoard.m_board[move.GetTo()] = movedPiece;
         tempBoard.m_board[move.GetFrom()] = EMPTY_PIECE;
-        
-        // Check if the moving side's king is in check
+
+        // Check if king is in check after move
         return tempBoard.IsInCheck(m_sideToMove);
     }
 
-    // Check if a square is attacked by specified color
+    // Check if square is attacked by given color
+    // Wrapper around MoveGenerator for convenience
     bool Board::IsSquareAttacked(int square, PlayerColor attackerColor) const
     {
         return MoveGenerator::IsSquareAttacked(m_board, square, attackerColor);
     }
 
-    // Generate human-readable board representation
+    // Generate human-readable string representation of board
+    // Displays board from White's perspective (rank 8 at top)
+    // Also shows game metadata (side to move, castling, en passant, etc.)
+    //
+    // Example output:
+    // 8  r n b q k b n r
+    // 7  p p p p p p p p
+    // 6  . . . . . . . .
+    // ...
+    // 1  R N B Q K B N R
+    //    a b c d e f g h
+    //
+    // Side to move: White
+    // En passant: -
+    // Castling: KQkq
+    // Half-move: 0, Full-move: 1
     std::string Board::ToString() const
     {
         std::stringstream ss;
-        
-        // Print board from rank 8 to rank 1
+
+        // Draw board from rank 8 to rank 1 (White's perspective)
         for (int rank = BOARD_SIZE - 1; rank >= 0; --rank)
         {
-            ss << (rank + 1) << " ";
+            ss << (rank + 1) << " "; // Rank number
             for (int file = 0; file < BOARD_SIZE; ++file)
             {
                 Piece piece = GetPieceAt(file, rank);
-                ss << " " << piece.GetSymbol();
+                ss << " " << piece.GetSymbol(); // Piece symbol (K, Q, R, etc. or '.')
             }
             ss << "\n";
         }
+        
+        // File letters
         ss << "   a b c d e f g h\n";
-        
-        // Print game state information
+
+        // Game metadata
         ss << "\nSide to move: " << (m_sideToMove == PlayerColor::White ? "White" : "Black") << "\n";
-        
+
+        // En passant target square (if any)
         if (m_enPassantSquare >= 0)
         {
             auto [file, rank] = IndexToCoordinate(m_enPassantSquare);
@@ -839,93 +993,119 @@ namespace Chess
         {
             ss << "En passant: -\n";
         }
-        
-        ss << "Castling: " 
-            << (m_castlingRights[0] ? "K" : "") 
-            << (m_castlingRights[1] ? "Q" : "") 
-            << (m_castlingRights[2] ? "k" : "") 
-            << (m_castlingRights[3] ? "q" : "") 
+
+        // Castling rights (KQkq format)
+        ss << "Castling: "
+            << (m_castlingRights[0] ? "K" : "") // White kingside
+            << (m_castlingRights[1] ? "Q" : "") // White queenside
+            << (m_castlingRights[2] ? "k" : "") // Black kingside
+            << (m_castlingRights[3] ? "q" : "") // Black queenside
             << "\n";
-        ss << "Half-move: " << m_halfMoveClock << ", Full-move: " << m_fullMoveNumber << "\n";
         
+        // Move counters
+        ss << "Half-move: " << m_halfMoveClock << ", Full-move: " << m_fullMoveNumber << "\n";
+
         return ss.str();
     }
 
-    // Calculate material balance (positive = white advantage)
+    // Calculate material balance (sum of piece values)
+    // Positive = White ahead, Negative = Black ahead
+    //
+    // Simple material evaluation without positional factors
+    // Used primarily for display/debugging, not for search evaluation
     int Board::EvaluateMaterial() const
     {
         int score = 0;
-        
+
         for (int i = 0; i < SQUARE_COUNT; ++i)
         {
             Piece piece = m_board[i];
             if (!piece) continue;
-            
+
             int value = PIECE_VALUES[static_cast<int>(piece.GetType())];
             if (piece.GetColor() == PlayerColor::White)
                 score += value;
             else
                 score -= value;
         }
-        
+
         return score;
     }
 
-    // ---------- FENParser Implementation ----------
-    
-    // Parse FEN string and load into board
+    // ========== FEN PARSER IMPLEMENTATION ==========
+    // FEN (Forsyth-Edwards Notation) is standard format for chess positions
+    //
+    // FEN format: 6 space-separated fields
+    // 1. Piece placement (rank 8 to rank 1, '/' separates ranks)
+    // 2. Active color ('w' or 'b')
+    // 3. Castling rights ('KQkq', '-' if none)
+    // 4. En passant target square (e.g., 'e3', '-' if none)
+    // 5. Halfmove clock (fifty-move rule counter)
+    // 6. Fullmove number (starts at 1, incremented after Black's move)
+    //
+    // Example: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+    // Parse FEN string into board state
+    // Returns true on success, false on parse error
+    //
+    // On success, board is fully initialized including:
+    // - Piece positions
+    // - King square tracking
+    // - Piece lists
+    // - All metadata (side to move, castling, etc.)
     bool FENParser::Parse(const std::string& fen, Board& board)
     {
         std::istringstream fenStream(fen);
         std::string segment;
-        
-        // 1. Piece placement
+
+        // Field 1: Piece placement
         if (!std::getline(fenStream, segment, ' '))
             return false;
-        
+
         if (!ParsePiecePlacement(segment, board.m_board))
             return false;
-        
-        // 2. Active color
+
+        // Field 2: Active color
         if (!std::getline(fenStream, segment, ' '))
             return false;
-        
+
         if (!ParseActiveColor(segment, board.m_sideToMove))
             return false;
-        
-        // 3. Castling rights
+
+        // Field 3: Castling rights
         if (!std::getline(fenStream, segment, ' '))
             return false;
-        
+
         if (!ParseCastlingRights(segment, board.m_castlingRights))
             return false;
-        
-        // 4. En passant
+
+        // Field 4: En passant target square
         if (!std::getline(fenStream, segment, ' '))
             return false;
-        
+
         if (!ParseEnPassant(segment, board.m_enPassantSquare))
             return false;
-        
-        // 5. Half-move clock
+
+        // Field 5: Halfmove clock
         if (!std::getline(fenStream, segment, ' '))
             return false;
-        
-        // 6. Full-move number
+
         std::string fullMoveStr;
+        // Field 6: Fullmove number
         if (!std::getline(fenStream, fullMoveStr, ' '))
             return false;
-        
-        if (!ParseMoveClocks(segment, fullMoveStr, 
+
+        if (!ParseMoveClocks(segment, fullMoveStr,
             board.m_halfMoveClock, board.m_fullMoveNumber))
             return false;
-        
-        // Find king positions and rebuild piece lists
+
+        // Initialize king square tracking and piece lists
         board.m_kingSquares[0] = -1;
         board.m_kingSquares[1] = -1;
         board.m_pieceLists[0].Clear();
         board.m_pieceLists[1].Clear();
 
+        // Scan board to find kings and populate piece lists
         for (int i = 0; i < SQUARE_COUNT; ++i)
         {
             Piece piece = board.m_board[i];
@@ -939,41 +1119,42 @@ namespace Chess
             }
         }
 
-        // Clear move history for new position
-        board.m_moveHistory.clear();
-		board.m_nullMoveHistory.clear();
+        // Reset move history (new position)
+        board.m_historyPly = 0;
+        board.m_nullMovePly = 0;
 
         return true;
     }
 
     // Generate FEN string from current board state
+    // Inverse of Parse() - creates FEN representation of position
     std::string FENParser::Generate(const Board& board)
     {
         std::stringstream fen;
-        
-        // 1. Piece placement (from rank 8 to rank 1)
+
+        // Field 1: Piece placement (rank 8 to rank 1)
         for (int rank = BOARD_SIZE - 1; rank >= 0; --rank)
         {
             int emptyCount = 0;
-            
+
             for (int file = 0; file < BOARD_SIZE; ++file)
             {
                 Piece piece = board.GetPieceAt(file, rank);
-                
+
                 if (piece.IsEmpty())
                 {
-                    emptyCount++;
+                    emptyCount++; // Count consecutive empty squares
                 }
                 else
                 {
-                    // Output empty square count if any
+                    // Write empty count if any
                     if (emptyCount > 0)
                     {
                         fen << emptyCount;
                         emptyCount = 0;
                     }
-                    
-                    // Output piece character
+
+                    // Write piece character (uppercase = White, lowercase = Black)
                     char symbol = piece.GetSymbol()[0];
                     if (piece.GetColor() == PlayerColor::Black)
                     {
@@ -982,36 +1163,36 @@ namespace Chess
                     fen << symbol;
                 }
             }
-            
-            // Output remaining empty squares
+
+            // Write remaining empty count for this rank
             if (emptyCount > 0)
             {
                 fen << emptyCount;
             }
-            
-            // Rank separator
+
+            // Rank separator (except after last rank)
             if (rank > 0)
             {
                 fen << '/';
             }
         }
-        
-        // 2. Active color
+
+        // Field 2: Active color
         fen << (board.GetSideToMove() == PlayerColor::White ? " w " : " b ");
-        
-        // 3. Castling rights
+
+        // Field 3: Castling rights
         bool anyCastling = false;
         if (board.m_castlingRights[0]) { fen << 'K'; anyCastling = true; }
         if (board.m_castlingRights[1]) { fen << 'Q'; anyCastling = true; }
         if (board.m_castlingRights[2]) { fen << 'k'; anyCastling = true; }
         if (board.m_castlingRights[3]) { fen << 'q'; anyCastling = true; }
-        
+
         if (!anyCastling)
         {
             fen << '-';
         }
-        
-        // 4. En passant square
+
+        // Field 4: En passant target square
         fen << ' ';
         if (board.GetEnPassantSquare() >= 0)
         {
@@ -1022,45 +1203,51 @@ namespace Chess
         {
             fen << '-';
         }
-        
-        // 5. Half-move clock
+
+        // Field 5: Halfmove clock
         fen << ' ' << board.GetHalfMoveClock();
-        
-        // 6. Full-move number
+
+        // Field 6: Fullmove number
         fen << ' ' << board.GetFullMoveNumber();
-        
+
         return fen.str();
     }
 
-    // Parse piece placement section of FEN string
-    bool FENParser::ParsePiecePlacement(const std::string& placement, 
+    // Parse piece placement field (rank 8 to rank 1)
+    // Format: pieces and digits separated by '/'
+    // Digits represent consecutive empty squares
+    //
+    // Example: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+    bool FENParser::ParsePiecePlacement(const std::string& placement,
                                         std::array<Piece, SQUARE_COUNT>& board)
     {
-        int square = 56; // Start from a8 (square 56)
+        int square = 56; // Start at a8 (rank 8, file a)
         board.fill(EMPTY_PIECE);
-        
+
         for (char c : placement)
         {
             if (c == '/')
             {
-                square -= 16; // Move to next rank down
+                square -= 16; // Move to start of next rank down (skip 8 back, skip 8 forward we added)
             }
             else if (std::isdigit(static_cast<unsigned char>(c)))
             {
-                square += static_cast<int>(c - '0'); // Skip empty squares
+                // Digit = number of empty squares
+                square += static_cast<int>(c - '0');
             }
             else
             {
-                // Parse piece character
+                // Piece character
                 PieceType type = PieceType::None;
-                PlayerColor color = std::isupper(static_cast<unsigned char>(c)) 
-                    ? PlayerColor::White 
+                PlayerColor color = std::isupper(static_cast<unsigned char>(c))
+                    ? PlayerColor::White
                     : PlayerColor::Black;
-                
+
                 char lowerC = static_cast<char>(
                     std::tolower(static_cast<unsigned char>(c))
                 );
-                
+
+                // Map character to piece type
                 switch (lowerC)
                 {
                     case 'p': type = PieceType::Pawn; break;
@@ -1069,25 +1256,25 @@ namespace Chess
                     case 'r': type = PieceType::Rook; break;
                     case 'q': type = PieceType::Queen; break;
                     case 'k': type = PieceType::King; break;
-                    default: return false;
+                    default: return false; // Invalid character
                 }
-                
+
                 if (square < 0 || square >= SQUARE_COUNT)
                     return false;
-                    
+
                 board[square] = Piece(type, color);
                 square++;
             }
         }
-        
-        // Validate that all ranks were processed
+
+        // Should end at square 8 (off the board after rank 1)
         if (square != 8)
             return false;
-        
+
         return true;
     }
 
-    // Parse active color from FEN string
+    // Parse active color field ('w' or 'b')
     bool FENParser::ParseActiveColor(const std::string& colorStr, PlayerColor& color)
     {
         if (colorStr == "w")
@@ -1103,15 +1290,18 @@ namespace Chess
         return false;
     }
 
-    // Parse castling rights from FEN string
-    bool FENParser::ParseCastlingRights(const std::string& castlingStr, 
+    // Parse castling rights field
+    // Format: 'KQkq' (any combination), or '-' for none
+    // K = White kingside, Q = White queenside
+    // k = Black kingside, q = Black queenside
+    bool FENParser::ParseCastlingRights(const std::string& castlingStr,
                                         std::array<bool, 4>& rights)
     {
         rights = {false, false, false, false};
-        
+
         if (castlingStr == "-")
-            return true;
-            
+            return true; // No castling rights
+
         for (char c : castlingStr)
         {
             switch (c)
@@ -1120,14 +1310,15 @@ namespace Chess
                 case 'Q': rights[1] = true; break; // White queenside
                 case 'k': rights[2] = true; break; // Black kingside
                 case 'q': rights[3] = true; break; // Black queenside
-                default: return false;
+                default: return false; // Invalid character
             }
         }
-        
+
         return true;
     }
 
-    // Parse en passant square from FEN string
+    // Parse en passant target square field
+    // Format: algebraic notation (e.g., 'e3'), or '-' for none
     bool FENParser::ParseEnPassant(const std::string& epStr, int& enPassantSquare)
     {
         if (epStr == "-")
@@ -1135,25 +1326,28 @@ namespace Chess
             enPassantSquare = -1;
             return true;
         }
-        
+
         if (epStr.length() != 2)
             return false;
-            
+
         char fileChar = epStr[0];
         char rankChar = epStr[1];
-        
+
+        // Validate algebraic notation
         if (fileChar < 'a' || fileChar > 'h' || rankChar < '1' || rankChar > '8')
             return false;
-            
+
         int file = static_cast<int>(fileChar - 'a');
         int rank = static_cast<int>(rankChar - '1');
-        
+
         enPassantSquare = CoordinateToIndex(file, rank);
         return true;
     }
 
-    // Parse move clocks from FEN string
-    bool FENParser::ParseMoveClocks(const std::string& halfMoveStr, 
+    // Parse move clock fields (halfmove clock and fullmove number)
+    // Halfmove clock: moves since last capture or pawn move (fifty-move rule)
+    // Fullmove number: starts at 1, incremented after Black's move
+    bool FENParser::ParseMoveClocks(const std::string& halfMoveStr,
                                     const std::string& fullMoveStr,
                                     int& halfMoveClock, int& fullMoveNumber)
     {
@@ -1161,15 +1355,16 @@ namespace Chess
         {
             halfMoveClock = std::stoi(halfMoveStr);
             fullMoveNumber = std::stoi(fullMoveStr);
-            
+
+            // Validate ranges
             if (halfMoveClock < 0 || fullMoveNumber < 1)
                 return false;
-                
+
             return true;
         }
         catch (...)
         {
-            return false;
+            return false; // Parsing failed
         }
     }
 }

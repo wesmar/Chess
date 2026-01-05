@@ -1,4 +1,8 @@
 // ChessGame.cpp
+// Chess game controller and AI player implementation
+// Handles game logic, move history, AI search with alpha-beta pruning,
+// transposition tables, move ordering heuristics, and PGN import/export
+
 #define NOMINMAX
 #include "ChessGame.h"
 #include "../Engine/Evaluation.h"
@@ -54,7 +58,7 @@ namespace Chess
             {
                 for (int to = 0; to < 64; ++to)
                 {
-                    m_history[side][from][to].store(0, std::memory_order_relaxed);
+                    m_history[side][from][to] = 0;
                 }
             }
         }
@@ -141,7 +145,7 @@ namespace Chess
 		// History heuristic: use shared table for the side that is making the move
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()];
         
         // Tactical bonus for moves to central squares
         // Central control is crucial in chess - pieces on central squares
@@ -272,7 +276,7 @@ namespace Chess
             {
                 for (int to = 0; to < 64; ++to)
                 {
-                    m_history[side][from][to].store(0, std::memory_order_relaxed);
+                    m_history[side][from][to] = 0;
                 }
             }
         }
@@ -550,8 +554,7 @@ namespace Chess
                 // Update history and killer moves for quiet moves
                 if (isQuiet)
                 {
-                    // Update shared history heuristic using atomic operation
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
 
                     // Store killer move
                     if (ply < MAX_PLY)
@@ -638,17 +641,32 @@ namespace Chess
             alpha = standPat;
         }
 
-        // Generate only tactical moves (captures/promotions)
-        auto moves = board.GenerateLegalMoves();
-        std::vector<Move> tacticalMoves;
-        tacticalMoves.reserve(moves.size());
+        std::vector<Move> pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
+            board.GetPieces(),
+            board.GetSideToMove(),
+            board.GetEnPassantSquare(),
+            &board.GetPieceList(board.GetSideToMove())
+        );
 
-        for (const auto& move : moves)
+        std::vector<Move> tacticalMoves;
+        tacticalMoves.reserve(pseudoTacticalMoves.size());
+
+        PlayerColor movedColor = board.GetSideToMove();
+        PlayerColor opponentColor = (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+        Board temp = board;
+
+        for (const auto& move : pseudoTacticalMoves)
         {
-            if (move.IsCapture() || move.IsPromotion())
+            temp.MakeMoveUnchecked(move);
+
+            int kingSquare = temp.GetKingSquare(movedColor);
+
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(temp.GetPieces(), kingSquare, opponentColor))
             {
                 tacticalMoves.push_back(move);
             }
+
+            temp.UndoMove();
         }
 
         OrderMoves(tacticalMoves, board, Move(), ply);
@@ -785,8 +803,7 @@ namespace Chess
                 // Update heuristics on beta cutoff
                 if (isQuiet)
                 {
-                    // Update shared history table using atomic operations
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
 
                     if (ply < MAX_PLY)
                     {
@@ -942,7 +959,7 @@ namespace Chess
         // Read from shared history table
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()];
 
         // Tactical bonus for central squares
         // Central control is crucial in chess - pieces on central squares
@@ -1190,16 +1207,32 @@ namespace Chess
             alpha = standPat;
         }
 
-        auto moves = board.GenerateLegalMoves();
-        std::vector<Move> tacticalMoves;
-        tacticalMoves.reserve(moves.size());
+        std::vector<Move> pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
+            board.GetPieces(),
+            board.GetSideToMove(),
+            board.GetEnPassantSquare(),
+            &board.GetPieceList(board.GetSideToMove())
+        );
 
-        for (const auto& move : moves)
+        std::vector<Move> tacticalMoves;
+        tacticalMoves.reserve(pseudoTacticalMoves.size());
+
+        PlayerColor movedColor = board.GetSideToMove();
+        PlayerColor opponentColor = (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+        Board temp = board;
+
+        for (const auto& move : pseudoTacticalMoves)
         {
-            if (move.IsCapture() || move.IsPromotion())
+            temp.MakeMoveUnchecked(move);
+
+            int kingSquare = temp.GetKingSquare(movedColor);
+
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(temp.GetPieces(), kingSquare, opponentColor))
             {
                 tacticalMoves.push_back(move);
             }
+
+            temp.UndoMove();
         }
 
         OrderMovesSimple(tacticalMoves, board, Move());

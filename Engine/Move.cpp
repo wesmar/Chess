@@ -51,6 +51,8 @@ namespace Chess
     // Parse UCI move string and match against legal moves
     // This approach is more robust than trying to infer MoveType from squares,
     // because castling, en passant, and captures require context from the position.
+    //
+    // Returns nullopt if move string is invalid or illegal
     std::optional<Move> Move::FromUCI(const std::string& uci, const Board& board)
     {
         // UCI moves are 4-5 characters: "e2e4" or "e7e8q"

@@ -1,4 +1,8 @@
 // VectorRenderer.cpp
+// Chess board and piece rendering using Unicode symbols
+// Renders 8x8 board with piece-square highlighting, coordinate labels,
+// and configurable color schemes using GDI fonts and text rendering
+
 #define NOMINMAX
 #include "VectorRenderer.h"
 #include <algorithm>

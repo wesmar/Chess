@@ -1,4 +1,7 @@
 // WinUtility.cpp
+// Windows utility function implementations
+// Provides UTF-8/UTF-16 string conversion and color/text helpers for WinAPI
+
 #include "WinUtility.h"
 
 namespace Chess

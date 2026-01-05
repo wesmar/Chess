@@ -1,4 +1,8 @@
 ﻿// WinApp.cpp
+// Main Windows application window and event handling
+// Implements game window with board rendering, sidebar UI, move input,
+// animation system, AI integration, menu handling, and file operations
+
 #include "WinApp.h"
 #include "Dialogs/PromotionDialog.h"
 #include "Dialogs/GameSettingsDialog.h"

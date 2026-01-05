@@ -1,4 +1,6 @@
 // WinApp.h
+// Main application window and Windows message handling
+// Implements chess board UI with sidebar, animation, and AI integration
 #pragma once
 
 #include "ChessGame.h"
@@ -10,146 +12,173 @@
 
 namespace Chess
 {
-    // ---------- Window Messages ----------
-    constexpr UINT WM_AI_MOVE_COMPLETE = WM_USER + 1;
-    constexpr UINT WM_GAME_STATE_CHANGED = WM_USER + 2;
+    // ========== CUSTOM WINDOW MESSAGES ==========
+    // Posted from background threads to main UI thread
+    constexpr UINT WM_AI_MOVE_COMPLETE = WM_USER + 1;      // AI finished calculating move
+    constexpr UINT WM_GAME_STATE_CHANGED = WM_USER + 2;    // Game state updated (check, mate, etc.)
 
-    // ---------- Main Application Window ----------
+    // ========== MAIN APPLICATION WINDOW ==========
+    // Primary game window with board rendering, sidebar UI, and event handling
+    // Manages user input, AI integration, animation system, and file operations
     class MainWindow
     {
     public:
         MainWindow();
         ~MainWindow();
 
+        // Initialize and create window
+        // @param hInstance: Application instance handle
+        // @param nCmdShow: Window show command (SW_SHOW, etc.)
+        // @return: true if window created successfully
         bool Create(HINSTANCE hInstance, int nCmdShow);
+        
+        // Run Windows message loop until application exit
         void RunMessageLoop();
 
+        // Window and component accessors
         HWND GetHandle() const { return m_hwnd; }
         ChessGame& GetGame() { return m_game; }
         ChessPieceRenderer& GetRenderer() { return m_renderer; }
 
-        // ---------- Public Methods ----------
-        void NewGame();
-        void UndoMove();
-        void RedoMove();
-        void SetGameMode(GameMode mode);
-        void SetAIDifficulty(DifficultyLevel difficulty);
-        void SaveGame();
-        void LoadGame();
-        void ClearSelection();
+        // ========== PUBLIC ACTIONS ==========
+        
+        void NewGame();                                 // Start new game with current settings
+        void UndoMove();                                // Undo last move
+        void RedoMove();                                // Redo previously undone move
+        void SetGameMode(GameMode mode);                // Change game mode (human/AI configuration)
+        void SetAIDifficulty(DifficultyLevel difficulty); // Update AI strength
+        void SaveGame();                                // Show save dialog and save game
+        void LoadGame();                                // Show open dialog and load game
+        void ClearSelection();                          // Clear selected square
 
-        // ---------- Event Handlers ----------
-        void OnPaint();
-        void OnSize(int width, int height);
-        void OnLButtonDown(int x, int y);
-        void OnRButtonDown(int x, int y);
-        void OnKeyDown(WPARAM keyCode);
-        void OnTimer();
+        // ========== EVENT HANDLERS ==========
+        // Called by window procedure for specific events
+        
+        void OnPaint();                                 // Render board and UI
+        void OnSize(int width, int height);             // Handle window resize
+        void OnLButtonDown(int x, int y);               // Handle left mouse click
+        void OnRButtonDown(int x, int y);               // Handle right mouse click
+        void OnKeyDown(WPARAM keyCode);                 // Handle keyboard input
+        void OnTimer();                                 // Update animation and AI state
 
     private:
-        // ---------- Window Management ----------
-        HWND m_hwnd = nullptr;
-        HINSTANCE m_hInstance = nullptr;
+        // ========== WINDOW MANAGEMENT ==========
+        HWND m_hwnd = nullptr;                          // Window handle
+        HINSTANCE m_hInstance = nullptr;                // Application instance
         std::wstring m_windowTitle = L"Modern Chess - C++20";
         
-        static constexpr int WINDOW_WIDTH = 1000;
-        static constexpr int WINDOW_HEIGHT = 700;
+        static constexpr int WINDOW_WIDTH = 1000;       // Default window width
+        static constexpr int WINDOW_HEIGHT = 700;       // Default window height
         static constexpr wchar_t WINDOW_CLASS_NAME[] = L"ModernChessWindowClass";
 
-        // ---------- Game Components ----------
-        ChessGame m_game;
-        ChessPieceRenderer m_renderer;
+        // ========== GAME COMPONENTS ==========
+        ChessGame m_game;                               // Game logic controller
+        ChessPieceRenderer m_renderer;                  // Board and piece renderer
         
-		// ---------- UI State ----------
-		struct UISettings
-		{
-			bool showLegalMoves = true;
-			bool showCoordinates = true;
-			bool flipBoard = false;
-			bool autoPromoteToQueen = true;
-			bool animateMoves = true;
-			int animationSpeed = 300;
-		};
+        // ========== UI SETTINGS ==========
+        // User interface preferences loaded from INI file
+        struct UISettings
+        {
+            bool showLegalMoves = true;                 // Highlight valid move destinations
+            bool showCoordinates = true;                // Show a-h and 1-8 labels
+            bool flipBoard = false;                     // View from black's perspective
+            bool autoPromoteToQueen = true;             // Auto-promote pawns to queen
+            bool animateMoves = true;                   // Enable smooth move animation
+            int animationSpeed = 300;                   // Animation duration in milliseconds
+        };
 
-		UISettings m_uiSettings;
+        UISettings m_uiSettings;
 
-		// Current game mode and difficulty for menu checkmarks
-		GameMode m_currentGameMode = GameMode::HumanVsComputer;
-		DifficultyLevel m_currentDifficulty = 3;
+        // Current game configuration for menu checkmarks
+        GameMode m_currentGameMode = GameMode::HumanVsComputer;
+        DifficultyLevel m_currentDifficulty = 3;
         
-        // ---------- Selection & Animation ----------
-        int m_selectedSquare = -1;
-        std::vector<int> m_highlightedSquares;
+        // ========== SELECTION & ANIMATION ==========
+        int m_selectedSquare = -1;                      // Currently selected square (-1 = none)
+        std::vector<int> m_highlightedSquares;          // Squares to highlight (legal moves)
         
+        // Move animation state
         struct Animation
         {
-            int fromSquare = -1;
-            int toSquare = -1;
-            Piece piece = EMPTY_PIECE;
-            DWORD startTime = 0;
-            int duration = 0;
-            bool inProgress = false;
+            int fromSquare = -1;                        // Source square
+            int toSquare = -1;                          // Destination square
+            Piece piece = EMPTY_PIECE;                  // Piece being animated
+            DWORD startTime = 0;                        // Animation start time (GetTickCount)
+            int duration = 0;                           // Animation duration (ms)
+            bool inProgress = false;                    // Animation active flag
         };
         
         Animation m_currentAnimation;
         
-        // ---------- Timing ----------
-        UINT_PTR m_timerId = 0;
-        constexpr static UINT TIMER_INTERVAL = 16;
+        // ========== TIMING ==========
+        UINT_PTR m_timerId = 0;                         // Timer ID for periodic updates
+        constexpr static UINT TIMER_INTERVAL = 16;     // ~60 FPS update rate
         
-        // ---------- AI Processing ----------
-        bool m_aiThinking = false;
-        std::future<Move> m_aiFuture;
+        // ========== AI PROCESSING ==========
+        bool m_aiThinking = false;                      // AI calculation in progress
+        std::future<Move> m_aiFuture;                   // Async AI move calculation
         
-        // ---------- Menu & Dialogs ----------
-        HMENU m_hMenu = nullptr;
+        // ========== MENU & DIALOGS ==========
+        HMENU m_hMenu = nullptr;                        // Main menu handle
         
-        // ---------- Private Methods ----------
-        bool RegisterWindowClass();
-        bool CreateMainWindow(int nCmdShow);
-        void CreateMenu();
-        void CreateStatusBar();
-        void UpdateStatusBar();
+        // ========== WINDOW CREATION ==========
+        bool RegisterWindowClass();                     // Register WNDCLASSEX
+        bool CreateMainWindow(int nCmdShow);            // Create and show window
+        void CreateMenu();                              // Create menu bar
+        void CreateStatusBar();                         // Create status bar at bottom
+        void UpdateStatusBar();                         // Update status bar text
         
-        // ---------- Message Handlers ----------
+        // ========== MESSAGE HANDLING ==========
+        // Windows message procedure dispatch
         static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
         LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
         
-        // ---------- Drawing ----------
-        void DrawBoard(HDC hdc, const RECT& clientRect);
-        void DrawSidebar(HDC hdc, const RECT& clientRect);
-        void DrawGameInfo(HDC hdc, const RECT& rect);
-        void DrawMoveHistory(HDC hdc, const RECT& rect);
-        void DrawControls(HDC hdc, const RECT& rect);
+        // ========== RENDERING ==========
+        void DrawBoard(HDC hdc, const RECT& clientRect);        // Render chess board
+        void DrawSidebar(HDC hdc, const RECT& clientRect);      // Render sidebar UI
+        void DrawGameInfo(HDC hdc, const RECT& rect);           // Game state and player info
+        void DrawMoveHistory(HDC hdc, const RECT& rect);        // Move list display
+        void DrawControls(HDC hdc, const RECT& rect);           // Button controls (reserved)
         
-        // ---------- Input Processing ----------
+        // ========== INPUT PROCESSING ==========
+        // Convert screen coordinates to board square index
         int ScreenToBoardSquare(int x, int y) const;
+        
+        // Calculate board rectangle within window (centered, leaves space for sidebar)
         RECT GetBoardRect(const RECT& clientRect) const;
         
-        // ---------- Game Logic ----------
-        void ProcessSquareClick(int square);
-        void ProcessPromotion(int from, int to);
-        void CompleteAIMove();
-        void CheckGameEnd();
+        // ========== GAME LOGIC ==========
+        void ProcessSquareClick(int square);            // Handle square selection and move execution
+        void ProcessPromotion(int from, int to);        // Show promotion dialog and execute
+        void CompleteAIMove();                          // Execute AI move from async result
+        void CheckGameEnd();                            // Check for checkmate/stalemate/draw
         
-        // ---------- File Operations ----------
-        std::wstring OpenFileDialog(bool save);
+        // ========== FILE OPERATIONS ==========
+        std::wstring OpenFileDialog(bool save);         // Show open/save file dialog
         void SaveGameToFile(const std::wstring& filename);
         void LoadGameFromFile(const std::wstring& filename);
         
-        // ---------- Animation ----------
+        // ========== ANIMATION ==========
         void StartAnimation(int fromSquare, int toSquare, Piece piece);
-        void UpdateAnimation();
-        void DrawAnimatedPiece(HDC hdc, const RECT& boardRect);
+        void UpdateAnimation();                         // Update animation progress
+        void DrawAnimatedPiece(HDC hdc, const RECT& boardRect); // Render piece at interpolated position
     };
 
-    // ---------- Application Class ----------
+    // ========== APPLICATION CLASS ==========
+    // Singleton application controller - manages window lifecycle
     class ChessApplication
     {
     public:
+        // Get singleton instance
         static ChessApplication& GetInstance();
         
+        // Initialize and run application
+        // @param hInstance: Application instance handle from WinMain
+        // @param nCmdShow: Window show command
+        // @return: Application exit code
         int Run(HINSTANCE hInstance, int nCmdShow);
+        
+        // Exit application (post quit message)
         void Exit();
         
         MainWindow& GetMainWindow() { return *m_mainWindow; }
@@ -162,8 +191,8 @@ namespace Chess
         HINSTANCE m_hInstance = nullptr;
         std::unique_ptr<MainWindow> m_mainWindow;
         
+        // Prevent copying
         ChessApplication(const ChessApplication&) = delete;
         ChessApplication& operator=(const ChessApplication&) = delete;
     };
-
 }
