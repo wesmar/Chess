@@ -67,6 +67,7 @@ namespace Chess
         {
             RecomputeZobristKey();
             RecomputeIncrementalScore();
+            RebuildOccupancy();
         }
         return result;
     }
@@ -170,6 +171,18 @@ namespace Chess
         }
     }
 
+    void Board::RebuildOccupancy()
+    {
+        m_allOccupied = 0ULL;
+        for (int sq = 0; sq < SQUARE_COUNT; ++sq)
+        {
+            if (!m_board[sq].IsEmpty())
+            {
+                SetOccupiedBit(sq);
+            }
+        }
+    }
+
     // Generate all legal moves in current position
     // Legal moves = pseudo-legal moves that don't leave king in check
     //
@@ -181,13 +194,13 @@ namespace Chess
     // 5. Undo the temporary move
     //
     // This is the definitive legal move list used for game rules enforcement
-    std::vector<Move> Board::GenerateLegalMoves() const
+    MoveList Board::GenerateLegalMoves() const
     {
         // Create temporary board for move validation
         Board temp = *this;
 
         // Generate pseudo-legal moves using move generator
-        std::vector<Move> moves = MoveGenerator::GeneratePseudoLegalMoves(
+        MoveList moves = MoveGenerator::GeneratePseudoLegalMoves(
             temp.m_board,
             temp.m_sideToMove,
             temp.m_enPassantSquare,
@@ -195,8 +208,7 @@ namespace Chess
             &temp.m_pieceLists[static_cast<int>(temp.m_sideToMove)]
         );
 
-        std::vector<Move> legalMoves;
-        legalMoves.reserve(moves.size());
+        MoveList legalMoves;
 
         const PlayerColor movedColor = temp.m_sideToMove;
         const PlayerColor opponentColor =
@@ -347,10 +359,19 @@ namespace Chess
         HandleEnPassant(move);
         HandleCastling(move);
 
+        // Update bitboard occupancy
+        ClearOccupiedBit(from);
+        if (!m_board[to].IsEmpty())
+        {
+            ClearOccupiedBit(to);
+        }
+
         // Move piece to destination square
         m_board[move.GetTo()] = m_board[move.GetFrom()];
         m_board[move.GetFrom()] = EMPTY_PIECE;
         m_board[move.GetTo()].SetMoved(true);
+
+        SetOccupiedBit(to);
 
         // Handle promotion - replace pawn with promoted piece
         if (move.IsPromotion())
@@ -377,6 +398,8 @@ namespace Chess
         // Complete castling rook move
         if (move.IsCastling())
         {
+            ClearOccupiedBit(castlingRookFrom);
+            SetOccupiedBit(castlingRookTo);
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(castlingRook.GetType())][static_cast<int>(castlingRook.GetColor())][castlingRookTo];
             UpdateIncrementalScore(castlingRookFrom, castlingRook, false);
             UpdateIncrementalScore(castlingRookTo, castlingRook, true);
@@ -387,6 +410,7 @@ namespace Chess
         if (move.IsEnPassant())
         {
             int capturedPawnSquare = to + ((m_sideToMove == PlayerColor::White) ? -8 : 8);
+            ClearOccupiedBit(capturedPawnSquare);
             Piece capturedPawn = Piece(PieceType::Pawn, (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(capturedPawn.GetType())][static_cast<int>(capturedPawn.GetColor())][capturedPawnSquare];
             UpdateIncrementalScore(capturedPawnSquare, capturedPawn, false);
@@ -544,6 +568,9 @@ namespace Chess
         {
             m_fullMoveNumber--;
         }
+
+        // Rebuild occupancy bitboard
+        RebuildOccupancy();
 
         return true;
     }

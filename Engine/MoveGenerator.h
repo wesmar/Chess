@@ -6,7 +6,6 @@
 #include "ChessConstants.h"
 #include "Piece.h"
 #include "Move.h"
-#include <vector>
 #include <array>
 
 namespace Chess
@@ -21,7 +20,7 @@ namespace Chess
         // Generate all pseudo-legal moves for given position
         // Returns moves that follow piece movement rules but may leave king in check
         // Legal move validation requires checking if king is attacked after move
-        static std::vector<Move> GeneratePseudoLegalMoves(
+        static MoveList GeneratePseudoLegalMoves(
             const std::array<Piece, SQUARE_COUNT>& board,
             PlayerColor sideToMove,
             int enPassantSquare = -1,
@@ -32,7 +31,7 @@ namespace Chess
         // Generate only tactical moves (captures and promotions)
         // Used in quiescence search to resolve tactical complications
         // Excludes quiet moves and castling for performance
-        static std::vector<Move> GenerateTacticalMoves(
+        static MoveList GenerateTacticalMoves(
             const std::array<Piece, SQUARE_COUNT>& board,
             PlayerColor sideToMove,
             int enPassantSquare = -1,
@@ -53,7 +52,8 @@ namespace Chess
         // Each generates moves following piece movement rules
         
         // Pawn moves: forward, two-square advance, captures, en passant, promotion
-        static std::vector<Move> GeneratePawnMoves(
+        static void GeneratePawnMoves(
+            MoveList& moves,
             const std::array<Piece, SQUARE_COUNT>& board,
             int square,
             PlayerColor color,
@@ -61,35 +61,40 @@ namespace Chess
         );
 
         // Knight moves: L-shaped jumps (2+1 or 1+2 squares)
-        static std::vector<Move> GenerateKnightMoves(
+        static void GenerateKnightMoves(
+            MoveList& moves,
             const std::array<Piece, SQUARE_COUNT>& board,
             int square,
             PlayerColor color
         );
 
         // Bishop moves: diagonal sliding until blocked
-        static std::vector<Move> GenerateBishopMoves(
+        static void GenerateBishopMoves(
+            MoveList& moves,
             const std::array<Piece, SQUARE_COUNT>& board,
             int square,
             PlayerColor color
         );
 
         // Rook moves: orthogonal sliding until blocked
-        static std::vector<Move> GenerateRookMoves(
+        static void GenerateRookMoves(
+            MoveList& moves,
             const std::array<Piece, SQUARE_COUNT>& board,
             int square,
             PlayerColor color
         );
 
         // Queen moves: combination of bishop and rook movement
-        static std::vector<Move> GenerateQueenMoves(
+        static void GenerateQueenMoves(
+            MoveList& moves,
             const std::array<Piece, SQUARE_COUNT>& board,
             int square,
             PlayerColor color
         );
 
         // King moves: one square in any direction, plus castling
-        static std::vector<Move> GenerateKingMoves(
+        static void GenerateKingMoves(
+            MoveList& moves,
             const std::array<Piece, SQUARE_COUNT>& board,
             int square,
             PlayerColor color,

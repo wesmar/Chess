@@ -173,10 +173,21 @@ namespace Chess
             return m_incrementalScore;
         }
 
+        // Bitboard occupancy helpers for hybrid architecture
+        [[nodiscard]] constexpr uint64_t GetAllOccupied() const noexcept
+        {
+            return m_allOccupied;
+        }
+
+        [[nodiscard]] constexpr bool IsOccupied(int square) const noexcept
+        {
+            return (m_allOccupied & (1ULL << square)) != 0;
+        }
+
         // ========== MOVE GENERATION & VALIDATION ==========
 
         // Generate all legal moves in current position
-        [[nodiscard]] std::vector<Move> GenerateLegalMoves() const;
+        [[nodiscard]] MoveList GenerateLegalMoves() const;
         
         // Check if specific move is legal
         [[nodiscard]] bool IsMoveLegal(const Move& move) const;
@@ -265,6 +276,19 @@ namespace Chess
         void UpdateIncrementalScore(int square, Piece piece, bool add);
         void RecomputeIncrementalScore();
 
+        // Bitboard occupancy maintenance
+        constexpr void SetOccupiedBit(int square) noexcept
+        {
+            m_allOccupied |= (1ULL << square);
+        }
+
+        constexpr void ClearOccupiedBit(int square) noexcept
+        {
+            m_allOccupied &= ~(1ULL << square);
+        }
+
+        void RebuildOccupancy();
+
         // ========== MEMBER VARIABLES ==========
 
         // Board state: 64 squares with pieces (aligned for cache efficiency)
@@ -296,6 +320,9 @@ namespace Chess
 
         // Incrementally maintained evaluation score (material + PST)
         int m_incrementalScore = 0;
+
+        // Bitboard occupancy tracking (hybrid architecture)
+        uint64_t m_allOccupied = 0;
 
         // Move history for undo functionality
         struct MoveRecord

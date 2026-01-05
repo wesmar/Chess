@@ -116,10 +116,10 @@ namespace Chess
         // ========== MOVE ORDERING ==========
         // Better move ordering = more beta cutoffs = faster search
         
-        void OrderMoves(std::vector<Move>& moves, const Board& board, Move ttMove, int ply);
+        void OrderMoves(MoveList& moves, const Board& board, Move ttMove, int ply);
         int ScoreMove(const Move& move, const Board& board, Move ttMove, int ply);
 
-        void OrderMovesWorker(std::vector<Move>& moves, const Board& board, Move ttMove,
+        void OrderMovesWorker(MoveList& moves, const Board& board, Move ttMove,
                               int ply, const ThreadLocalData& tld);
         int ScoreMoveWorker(const Move& move, const Board& board, Move ttMove, int ply,
                             const ThreadLocalData& tld);
@@ -128,7 +128,7 @@ namespace Chess
         void HelperSearch(Board board, int depth);
         int HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
         int HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
-        void OrderMovesSimple(std::vector<Move>& moves, const Board& board, Move ttMove);
+        void OrderMovesSimple(MoveList& moves, const Board& board, Move ttMove);
     };
 
     // ========== PGN GAME RECORD ==========
@@ -176,7 +176,7 @@ namespace Chess
         [[nodiscard]] const Board& GetBoard() const { return m_board; }
         [[nodiscard]] GameState GetGameState() const { return m_board.GetGameState(); }
         [[nodiscard]] PlayerColor GetCurrentPlayer() const { return m_board.GetCurrentPlayer(); }
-        [[nodiscard]] const std::vector<Move>& GetLegalMoves() const { return m_legalMoves; }
+        [[nodiscard]] const MoveList& GetLegalMoves() const { return m_legalMoves; }
         [[nodiscard]] const std::vector<int>& GetHighlightedSquares() const { return m_highlightedSquares; }
         [[nodiscard]] GameMode GetGameMode() const { return m_gameMode; }
         
@@ -258,7 +258,7 @@ namespace Chess
 
         // ========== UI STATE ==========
         int m_selectedSquare = -1;
-        std::vector<Move> m_legalMoves;
+        MoveList m_legalMoves;
         std::vector<int> m_highlightedSquares;
 
         // ========== MOVE HISTORY ==========

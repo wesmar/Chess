@@ -166,7 +166,7 @@ namespace Chess
     }
 
     // Sort moves by score for better alpha-beta pruning efficiency
-    void AIPlayer::OrderMoves(std::vector<Move>& moves, const Board& board, Move ttMove, int ply)
+    void AIPlayer::OrderMoves(MoveList& moves, const Board& board, Move ttMove, int ply)
     {
         std::vector<std::pair<int, Move>> scoredMoves;
 
@@ -641,15 +641,14 @@ namespace Chess
             alpha = standPat;
         }
 
-        std::vector<Move> pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
+        MoveList pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
             board.GetPieces(),
             board.GetSideToMove(),
             board.GetEnPassantSquare(),
             &board.GetPieceList(board.GetSideToMove())
         );
 
-        std::vector<Move> tacticalMoves;
-        tacticalMoves.reserve(pseudoTacticalMoves.size());
+        MoveList tacticalMoves;
 
         PlayerColor movedColor = board.GetSideToMove();
         PlayerColor opponentColor = (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
@@ -870,8 +869,7 @@ namespace Chess
         if (standPat > alpha) alpha = standPat;
 
         auto moves = board.GenerateLegalMoves();
-        std::vector<Move> tacticalMoves;
-        tacticalMoves.reserve(moves.size());
+        MoveList tacticalMoves;
 
         for (const auto& move : moves)
         {
@@ -897,7 +895,7 @@ namespace Chess
     }
 
     // Move ordering for worker threads using thread-local data
-    void AIPlayer::OrderMovesWorker(std::vector<Move>& moves, const Board& board, Move ttMove,
+    void AIPlayer::OrderMovesWorker(MoveList& moves, const Board& board, Move ttMove,
                                      int ply, const ThreadLocalData& tld)
     {
         std::vector<std::pair<int, Move>> scoredMoves;
@@ -979,7 +977,7 @@ namespace Chess
         return historyScore + centerBonus;
     }
 
-    void AIPlayer::OrderMovesSimple(std::vector<Move>& moves, const Board& board, Move ttMove)
+    void AIPlayer::OrderMovesSimple(MoveList& moves, const Board& board, Move ttMove)
     {
         std::vector<std::pair<int, Move>> scoredMoves;
 
@@ -1207,15 +1205,14 @@ namespace Chess
             alpha = standPat;
         }
 
-        std::vector<Move> pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
+        MoveList pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
             board.GetPieces(),
             board.GetSideToMove(),
             board.GetEnPassantSquare(),
             &board.GetPieceList(board.GetSideToMove())
         );
 
-        std::vector<Move> tacticalMoves;
-        tacticalMoves.reserve(pseudoTacticalMoves.size());
+        MoveList tacticalMoves;
 
         PlayerColor movedColor = board.GetSideToMove();
         PlayerColor opponentColor = (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;

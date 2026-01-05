@@ -6,8 +6,8 @@
 #include "Piece.h"
 #include <cstdint>
 #include <string>
+#include <array>
 #include <optional>
-#include <vector>
 #include <memory>
 
 // Forward declaration to avoid circular include with Board.h
@@ -164,5 +164,30 @@ namespace Chess
     private:
         uint32_t m_data = 0;    // Packed move data (from, to, type, promotion)
         Piece m_captured;       // Captured piece (stored separately for move history)
+    };
+
+    // ========== MOVE LIST ==========
+    // Stack-allocated move buffer for efficient move generation
+    // Avoids heap allocations in hot path (millions of calls during search)
+    // Maximum possible moves in chess position is ~220 (rare), 256 is safe upper bound
+    struct MoveList
+    {
+        std::array<Move, 256> moves;
+        int count = 0;
+
+        void push_back(const Move& move) { moves[count++] = move; }
+
+        Move* begin() { return &moves[0]; }
+        Move* end() { return &moves[count]; }
+        const Move* begin() const { return &moves[0]; }
+        const Move* end() const { return &moves[count]; }
+
+        Move& operator[](int index) { return moves[index]; }
+        const Move& operator[](int index) const { return moves[index]; }
+
+        int size() const { return count; }
+        bool empty() const { return count == 0; }
+        void reserve(int) { }
+        void clear() { count = 0; }
     };
 }

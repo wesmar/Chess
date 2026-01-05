@@ -13,7 +13,6 @@
 #include "MoveGenerator.h"
 #include "Board.h"
 #include <algorithm>
-#include <vector>
 
 namespace Chess
 {
@@ -23,14 +22,14 @@ namespace Chess
     //
     // Uses piece list optimization when available for faster iteration
     // Falls back to full board scan if piece list is not provided
-    std::vector<Move> MoveGenerator::GeneratePseudoLegalMoves(
+    MoveList MoveGenerator::GeneratePseudoLegalMoves(
         const std::array<Piece, SQUARE_COUNT>& board,
         PlayerColor sideToMove,
         int enPassantSquare,
         const std::array<bool, 4>* castlingRights,
         const PieceList* pieceList)
     {
-        std::vector<Move> moves;
+        MoveList moves;
 
         // Fast path: iterate only over pieces of current side using piece list
         // This is much faster than scanning all 64 squares
@@ -47,38 +46,32 @@ namespace Chess
                 {
                 case PieceType::Pawn:
                 {
-                    auto pawnMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
-                    moves.insert(moves.end(), pawnMoves.begin(), pawnMoves.end());
+                    GeneratePawnMoves(moves, board, i, sideToMove, enPassantSquare);
                     break;
                 }
                 case PieceType::Knight:
                 {
-                    auto knightMoves = GenerateKnightMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), knightMoves.begin(), knightMoves.end());
+                    GenerateKnightMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::Bishop:
                 {
-                    auto bishopMoves = GenerateBishopMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), bishopMoves.begin(), bishopMoves.end());
+                    GenerateBishopMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::Rook:
                 {
-                    auto rookMoves = GenerateRookMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), rookMoves.begin(), rookMoves.end());
+                    GenerateRookMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::Queen:
                 {
-                    auto queenMoves = GenerateQueenMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), queenMoves.begin(), queenMoves.end());
+                    GenerateQueenMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::King:
                 {
-                    auto kingMoves = GenerateKingMoves(board, i, sideToMove, castlingRights);
-                    moves.insert(moves.end(), kingMoves.begin(), kingMoves.end());
+                    GenerateKingMoves(moves, board, i, sideToMove, castlingRights);
                     break;
                 }
                 default:
@@ -100,38 +93,32 @@ namespace Chess
                 {
                 case PieceType::Pawn:
                 {
-                    auto pawnMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
-                    moves.insert(moves.end(), pawnMoves.begin(), pawnMoves.end());
+                    GeneratePawnMoves(moves, board, i, sideToMove, enPassantSquare);
                     break;
                 }
                 case PieceType::Knight:
                 {
-                    auto knightMoves = GenerateKnightMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), knightMoves.begin(), knightMoves.end());
+                    GenerateKnightMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::Bishop:
                 {
-                    auto bishopMoves = GenerateBishopMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), bishopMoves.begin(), bishopMoves.end());
+                    GenerateBishopMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::Rook:
                 {
-                    auto rookMoves = GenerateRookMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), rookMoves.begin(), rookMoves.end());
+                    GenerateRookMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::Queen:
                 {
-                    auto queenMoves = GenerateQueenMoves(board, i, sideToMove);
-                    moves.insert(moves.end(), queenMoves.begin(), queenMoves.end());
+                    GenerateQueenMoves(moves, board, i, sideToMove);
                     break;
                 }
                 case PieceType::King:
                 {
-                    auto kingMoves = GenerateKingMoves(board, i, sideToMove, castlingRights);
-                    moves.insert(moves.end(), kingMoves.begin(), kingMoves.end());
+                    GenerateKingMoves(moves, board, i, sideToMove, castlingRights);
                     break;
                 }
                 default:
@@ -148,13 +135,14 @@ namespace Chess
     // This avoids the horizon effect by searching forcing moves deeply
     //
     // Note: Castling is excluded as it's not considered tactical
-    std::vector<Move> MoveGenerator::GenerateTacticalMoves(
+    MoveList MoveGenerator::GenerateTacticalMoves(
         const std::array<Piece, SQUARE_COUNT>& board,
         PlayerColor sideToMove,
         int enPassantSquare,
         const PieceList* pieceList)
     {
-        std::vector<Move> moves;
+        MoveList allMoves;
+        MoveList moves;
 
         // Optimize with piece list when available
         if (pieceList)
@@ -164,42 +152,44 @@ namespace Chess
                 int i = pieceList->squares[idx];
                 Piece piece = board[i];
 
-                std::vector<Move> pieceMoves;
+                int startCount = allMoves.count;
 
                 // Generate all moves for this piece
                 switch (piece.GetType())
                 {
                 case PieceType::Pawn:
-                    pieceMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
+                    GeneratePawnMoves(allMoves, board, i, sideToMove, enPassantSquare);
                     break;
                 case PieceType::Knight:
-                    pieceMoves = GenerateKnightMoves(board, i, sideToMove);
+                    GenerateKnightMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::Bishop:
-                    pieceMoves = GenerateBishopMoves(board, i, sideToMove);
+                    GenerateBishopMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::Rook:
-                    pieceMoves = GenerateRookMoves(board, i, sideToMove);
+                    GenerateRookMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::Queen:
-                    pieceMoves = GenerateQueenMoves(board, i, sideToMove);
+                    GenerateQueenMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::King:
                     // Pass nullptr for castling rights since castling is not tactical
-                    pieceMoves = GenerateKingMoves(board, i, sideToMove, nullptr);
+                    GenerateKingMoves(allMoves, board, i, sideToMove, nullptr);
                     break;
                 default:
                     break;
                 }
 
                 // Filter to only tactical moves (captures and promotions)
-                for (const auto& move : pieceMoves)
+                for (int j = startCount; j < allMoves.count; ++j)
                 {
+                    const auto& move = allMoves[j];
                     if (move.IsCapture() || move.IsPromotion())
                     {
                         moves.push_back(move);
                     }
                 }
+                allMoves.count = startCount;
             }
         }
         else
@@ -211,39 +201,41 @@ namespace Chess
                 if (piece.IsEmpty() || !piece.IsColor(sideToMove))
                     continue;
 
-                std::vector<Move> pieceMoves;
+                int startCount = allMoves.count;
 
                 switch (piece.GetType())
                 {
                 case PieceType::Pawn:
-                    pieceMoves = GeneratePawnMoves(board, i, sideToMove, enPassantSquare);
+                    GeneratePawnMoves(allMoves, board, i, sideToMove, enPassantSquare);
                     break;
                 case PieceType::Knight:
-                    pieceMoves = GenerateKnightMoves(board, i, sideToMove);
+                    GenerateKnightMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::Bishop:
-                    pieceMoves = GenerateBishopMoves(board, i, sideToMove);
+                    GenerateBishopMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::Rook:
-                    pieceMoves = GenerateRookMoves(board, i, sideToMove);
+                    GenerateRookMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::Queen:
-                    pieceMoves = GenerateQueenMoves(board, i, sideToMove);
+                    GenerateQueenMoves(allMoves, board, i, sideToMove);
                     break;
                 case PieceType::King:
-                    pieceMoves = GenerateKingMoves(board, i, sideToMove, nullptr);
+                    GenerateKingMoves(allMoves, board, i, sideToMove, nullptr);
                     break;
                 default:
                     break;
                 }
 
-                for (const auto& move : pieceMoves)
+                for (int j = startCount; j < allMoves.count; ++j)
                 {
+                    const auto& move = allMoves[j];
                     if (move.IsCapture() || move.IsPromotion())
                     {
                         moves.push_back(move);
                     }
                 }
+                allMoves.count = startCount;
             }
         }
 
@@ -258,13 +250,13 @@ namespace Chess
     // - Promotion on reaching back rank
     //
     // Direction and rules depend on pawn color (white moves up, black moves down)
-    std::vector<Move> MoveGenerator::GeneratePawnMoves(
+    void MoveGenerator::GeneratePawnMoves(
+        MoveList& moves,
         const std::array<Piece, SQUARE_COUNT>& board,
         int square,
         PlayerColor color,
         int enPassantSquare)
     {
-        std::vector<Move> moves;
 
         // Calculate direction and special ranks based on pawn color
         int direction = (color == PlayerColor::White) ? 8 : -8;  // White moves up (+8), black down (-8)
@@ -284,14 +276,14 @@ namespace Chess
             {
                 // Generate all four promotion options (Queen, Rook, Bishop, Knight)
                 // Queen promotion is most common, but underpromotion can be useful
-                moves.emplace_back(square, oneForward, MoveType::Promotion, PieceType::Queen);
-                moves.emplace_back(square, oneForward, MoveType::Promotion, PieceType::Rook);
-                moves.emplace_back(square, oneForward, MoveType::Promotion, PieceType::Bishop);
-                moves.emplace_back(square, oneForward, MoveType::Promotion, PieceType::Knight);
+                moves.push_back(Move(square, oneForward, MoveType::Promotion, PieceType::Queen));
+                moves.push_back(Move(square, oneForward, MoveType::Promotion, PieceType::Rook));
+                moves.push_back(Move(square, oneForward, MoveType::Promotion, PieceType::Bishop));
+                moves.push_back(Move(square, oneForward, MoveType::Promotion, PieceType::Knight));
             }
             else
             {
-                moves.emplace_back(square, oneForward, MoveType::Normal);
+                moves.push_back(Move(square, oneForward, MoveType::Normal));
             }
 
             // Two-square move from starting position
@@ -301,7 +293,7 @@ namespace Chess
                 int twoForward = square + 2 * direction;
                 if (twoForward >= 0 && twoForward < SQUARE_COUNT && board[twoForward].IsEmpty())
                 {
-                    moves.emplace_back(square, twoForward, MoveType::Normal);
+                    moves.push_back(Move(square, twoForward, MoveType::Normal));
                 }
             }
         }
@@ -322,14 +314,14 @@ namespace Chess
                     if (toRank == promotionRank)
                     {
                         // All four promotion options for capturing moves
-                        moves.emplace_back(square, captureLeft, MoveType::Capture, PieceType::Queen, target);
-                        moves.emplace_back(square, captureLeft, MoveType::Capture, PieceType::Rook, target);
-                        moves.emplace_back(square, captureLeft, MoveType::Capture, PieceType::Bishop, target);
-                        moves.emplace_back(square, captureLeft, MoveType::Capture, PieceType::Knight, target);
+                        moves.push_back(Move(square, captureLeft, MoveType::Capture, PieceType::Queen, target));
+                        moves.push_back(Move(square, captureLeft, MoveType::Capture, PieceType::Rook, target));
+                        moves.push_back(Move(square, captureLeft, MoveType::Capture, PieceType::Bishop, target));
+                        moves.push_back(Move(square, captureLeft, MoveType::Capture, PieceType::Knight, target));
                     }
                     else
                     {
-                        moves.emplace_back(square, captureLeft, MoveType::Capture, PieceType::None, target);
+                        moves.push_back(Move(square, captureLeft, MoveType::Capture, PieceType::None, target));
                     }
                 }
             }
@@ -348,14 +340,14 @@ namespace Chess
 
                     if (toRank == promotionRank)
                     {
-                        moves.emplace_back(square, captureRight, MoveType::Capture, PieceType::Queen, target);
-                        moves.emplace_back(square, captureRight, MoveType::Capture, PieceType::Rook, target);
-                        moves.emplace_back(square, captureRight, MoveType::Capture, PieceType::Bishop, target);
-                        moves.emplace_back(square, captureRight, MoveType::Capture, PieceType::Knight, target);
+                        moves.push_back(Move(square, captureRight, MoveType::Capture, PieceType::Queen, target));
+                        moves.push_back(Move(square, captureRight, MoveType::Capture, PieceType::Rook, target));
+                        moves.push_back(Move(square, captureRight, MoveType::Capture, PieceType::Bishop, target));
+                        moves.push_back(Move(square, captureRight, MoveType::Capture, PieceType::Knight, target));
                     }
                     else
                     {
-                        moves.emplace_back(square, captureRight, MoveType::Capture, PieceType::None, target);
+                        moves.push_back(Move(square, captureRight, MoveType::Capture, PieceType::None, target));
                     }
                 }
             }
@@ -373,30 +365,28 @@ namespace Chess
                 if (file > 0 && enPassantSquare == square + direction - 1)
                 {
                     // Create captured pawn piece for move record
-                    moves.emplace_back(square, enPassantSquare, MoveType::EnPassant, PieceType::None,
-                                       Piece(PieceType::Pawn, (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White));
+                    moves.push_back(Move(square, enPassantSquare, MoveType::EnPassant, PieceType::None,
+                                       Piece(PieceType::Pawn, (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White)));
                 }
                 else if (file < 7 && enPassantSquare == square + direction + 1)
                 {
-                    moves.emplace_back(square, enPassantSquare, MoveType::EnPassant, PieceType::None,
-                                       Piece(PieceType::Pawn, (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White));
+                    moves.push_back(Move(square, enPassantSquare, MoveType::EnPassant, PieceType::None,
+                                       Piece(PieceType::Pawn, (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White)));
                 }
             }
         }
-
-        return moves;
     }
 
     // Generate all legal knight moves from given square
     // Knights move in an L-shape: 2 squares in one direction, 1 square perpendicular
     // Knights are the only piece that can "jump over" other pieces
-    std::vector<Move> MoveGenerator::GenerateKnightMoves(
+    void MoveGenerator::GenerateKnightMoves(
+        MoveList& moves,
         const std::array<Piece, SQUARE_COUNT>& board,
         int square,
         PlayerColor color)
     {
         (void)color; // Color not needed for knight move generation
-        std::vector<Move> moves;
 
         auto [file, rank] = IndexToCoordinate(square);
 
@@ -415,24 +405,22 @@ namespace Chess
                 if (target.IsEmpty() || target.IsOppositeColor(board[square]))
                 {
                     MoveType type = target.IsEmpty() ? MoveType::Normal : MoveType::Capture;
-                    moves.emplace_back(square, targetSquare, type, PieceType::None, target);
+                    moves.push_back(Move(square, targetSquare, type, PieceType::None, target));
                 }
             }
         }
-
-        return moves;
     }
 
     // Generate all legal bishop moves from given square
     // Bishops move diagonally any number of squares until blocked
     // This is a sliding piece - moves along diagonals until hitting edge or another piece
-    std::vector<Move> MoveGenerator::GenerateBishopMoves(
+    void MoveGenerator::GenerateBishopMoves(
+        MoveList& moves,
         const std::array<Piece, SQUARE_COUNT>& board,
         int square,
         PlayerColor color)
     {
         (void)color;
-        std::vector<Move> moves;
 
         auto [file, rank] = IndexToCoordinate(square);
 
@@ -457,12 +445,12 @@ namespace Chess
                 if (target.IsEmpty())
                 {
                     // Empty square - add move and continue sliding
-                    moves.emplace_back(square, targetSquare, MoveType::Normal);
+                    moves.push_back(Move(square, targetSquare, MoveType::Normal));
                 }
                 else if (target.IsOppositeColor(board[square]))
                 {
                     // Opponent piece - can capture but must stop here
-                    moves.emplace_back(square, targetSquare, MoveType::Capture, PieceType::None, target);
+                    moves.push_back(Move(square, targetSquare, MoveType::Capture, PieceType::None, target));
                     break;
                 }
                 else
@@ -472,20 +460,18 @@ namespace Chess
                 }
             }
         }
-
-        return moves;
     }
 
     // Generate all legal rook moves from given square
     // Rooks move horizontally or vertically any number of squares until blocked
     // Similar to bishop but along ranks/files instead of diagonals
-    std::vector<Move> MoveGenerator::GenerateRookMoves(
+    void MoveGenerator::GenerateRookMoves(
+        MoveList& moves,
         const std::array<Piece, SQUARE_COUNT>& board,
         int square,
         PlayerColor color)
     {
         (void)color;
-        std::vector<Move> moves;
 
         auto [file, rank] = IndexToCoordinate(square);
 
@@ -509,11 +495,11 @@ namespace Chess
 
                 if (target.IsEmpty())
                 {
-                    moves.emplace_back(square, targetSquare, MoveType::Normal);
+                    moves.push_back(Move(square, targetSquare, MoveType::Normal));
                 }
                 else if (target.IsOppositeColor(board[square]))
                 {
-                    moves.emplace_back(square, targetSquare, MoveType::Capture, PieceType::None, target);
+                    moves.push_back(Move(square, targetSquare, MoveType::Capture, PieceType::None, target));
                     break;
                 }
                 else
@@ -522,28 +508,20 @@ namespace Chess
                 }
             }
         }
-
-        return moves;
     }
 
     // Generate all legal queen moves from given square
     // Queens combine bishop and rook movement - can move any direction any distance
     // This is implemented by combining bishop and rook move generation
-    std::vector<Move> MoveGenerator::GenerateQueenMoves(
+    void MoveGenerator::GenerateQueenMoves(
+        MoveList& moves,
         const std::array<Piece, SQUARE_COUNT>& board,
         int square,
         PlayerColor color)
     {
-        std::vector<Move> moves;
-
         // Queen moves = Bishop moves + Rook moves
-        auto bishopMoves = GenerateBishopMoves(board, square, color);
-        moves.insert(moves.end(), bishopMoves.begin(), bishopMoves.end());
-
-        auto rookMoves = GenerateRookMoves(board, square, color);
-        moves.insert(moves.end(), rookMoves.begin(), rookMoves.end());
-
-        return moves;
+        GenerateBishopMoves(moves, board, square, color);
+        GenerateRookMoves(moves, board, square, color);
     }
 	
 	// Generate all legal king moves from given square
@@ -555,14 +533,13 @@ namespace Chess
 	// - Squares between are empty
 	// - King not in check
 	// - King doesn't pass through or land on attacked square
-	std::vector<Move> MoveGenerator::GenerateKingMoves(
+	void MoveGenerator::GenerateKingMoves(
+		MoveList& moves,
 		const std::array<Piece, SQUARE_COUNT>& board,
 		int square,
 		PlayerColor color,
 		const std::array<bool, 4>* castlingRights)
 	{
-		std::vector<Move> moves;
-
 		auto [file, rank] = IndexToCoordinate(square);
 
 		// Regular king moves - one square in any direction
@@ -579,14 +556,14 @@ namespace Chess
 				if (target.IsEmpty() || target.IsOppositeColor(board[square]))
 				{
 					MoveType type = target.IsEmpty() ? MoveType::Normal : MoveType::Capture;
-					moves.emplace_back(square, targetSquare, type, PieceType::None, target);
+					moves.push_back(Move(square, targetSquare, type, PieceType::None, target));
 				}
 			}
 		}
 
 		// Early return if castling rights not provided (e.g., in tactical move generation)
 		if (!castlingRights)
-			return moves;
+			return;
 
 		PlayerColor opponentColor = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
 
@@ -637,7 +614,7 @@ namespace Chess
 						if (pathSafe)
 						{
 							// Castling move: king moves two squares towards rook
-							moves.emplace_back(square, square + 2, MoveType::Castling);
+							moves.push_back(Move(square, square + 2, MoveType::Castling));
 						}
 					}
 				}
@@ -681,14 +658,12 @@ namespace Chess
 
 						if (pathSafe)
 						{
-							moves.emplace_back(square, square - 2, MoveType::Castling);
+							moves.push_back(Move(square, square - 2, MoveType::Castling));
 						}
 					}
 				}
 			}
 		}
-
-		return moves;
 	}
 
     // Check if a square is under attack by opponent pieces
