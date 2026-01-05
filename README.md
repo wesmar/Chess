@@ -70,7 +70,7 @@ This project proves that modern C++20 can be as low-level as C while maintaining
 - **Cache Locality**: The `Board` class is aligned to 64 bytes (L1 Cache Line size). Fetching a board state fetches the entire board into the CPU cache in a single cycle
 - **Data Packing**: `Piece` class is a 1-byte wrapper around `uint8_t` with no v-table overhead
 - **Stack Allocation**: Heavy preference for stack memory over heap allocation to reduce fragmentation and allocation costs
-- **Small Footprint**: The entire engine logic compiles to <150 KB, making it suitable for embedded environments or recovery tools (WinRE)
+- **Small Footprint**: The entire engine logic compiles to <200 KB, making it suitable for embedded environments or recovery tools (WinRE)
 
 ### 🎨 User Interface
 - **Unicode Rendering** - clean chess pieces (♔♕♖♗♘♙) using native WinAPI vector rendering
