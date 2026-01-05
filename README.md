@@ -13,7 +13,7 @@ A lightweight, educational chess engine written in modern C++20 with pure WinAPI
 
 Most chess engines are either too simple (lacking modern techniques) or too complex (thousands of files, external dependencies). This project aims to be **educational yet powerful** - implementing professional chess engine techniques in clean, readable code.
 
-This is a case study in building a high-performance chess system using **Data-Oriented Design (DOD)** principles, maximizing computational throughput while drastically reducing binary size (<150 KB) and eliminating all external library dependencies.
+This is a case study in building a high-performance chess system using **Data-Oriented Design (DOD)** principles, maximizing computational throughput while drastically reducing binary size and eliminating all external library dependencies.
 
 ## Key Features
 
@@ -24,21 +24,37 @@ This is a case study in building a high-performance chess system using **Data-Or
 - **Portable**: Even runs in Windows Recovery Environment (WinRE)!
 - **High Performance**: ~2.5M nodes/second per core
 
-### 🧠 Professional Engine Techniques
+### 🧠 Advanced Search Algorithms
+The engine employs sophisticated search reduction techniques to maximize depth:
 - **Minimax with Alpha-Beta Pruning** - efficient move tree search
+- **Principal Variation Search (PVS)** - optimizes alpha-beta pruning by assuming the first move is best
 - **Iterative Deepening** - finds best move within time limit
+- **Null Move Pruning (NMP)** - aggressively prunes branches where the opponent cannot improve their position even if allowed two moves in a row (huge ELO gain)
+- **Late Move Reduction (LMR)** - reduces search depth for quiet moves late in the move list, allowing deeper search in critical lines
 - **Zobrist Hashing** - lightning-fast position comparison using incremental XOR-sum
 - **Transposition Table** - avoids re-analyzing same positions with striped locking
 - **Quiescence Search** - eliminates horizon effect
 - **Move Ordering (MVV-LVA)** - prioritizes captures for faster pruning
 - **Killer Move Heuristic** - remembers good non-capture moves
 - **History Heuristic** - side-specific move scoring
-- **Null Move Pruning** - aggressive search space reduction
-- **Late Move Reduction (LMR)** - deeper search for promising lines
 - **Root-Parallel Search** - multi-threaded search with dynamic load balancing
 - **Opening Book** - hardcoded main line positions
 
-### 🏗️ Architecture & Design Choices
+### ⚡ High-Performance Move Generation
+- **Hybrid Representation**: 64-byte Mailbox (Cache-Aligned) for board state + Bitboards for occupancy queries
+- **Bitwise Sliding Generators**: Uses advanced bit-twiddling (e.g., Hyperbola Quintessence concepts) to generate rook/bishop moves without large lookup tables (~800KB saved compared to Magic Bitboards)
+- **Branchless Logic**: Heavy use of bitwise operations to minimize branch misprediction penalties
+
+### 📊 Hand-Crafted Evaluation (HCE)
+A tuned evaluation function focusing on:
+- **Material & Position**: Piece-Square Tables (PST) interpolated between opening and endgame phases
+- **Pawn Structure**: Penalties for isolated, doubled, and backward pawns
+- **King Safety**: Analysis of pawn shield integrity and open files near the king
+- **Mobility**: Bonuses for piece activity and center control
+- **Passed Pawns**: Special evaluation with king distance and rook placement considerations
+- **Tapered Evaluation**: Smooth blending of middlegame/endgame scores based on game phase
+
+### 🗝️ Architecture & Design Choices
 
 #### Memory Architecture: Cache-Locality First
 I deliberately chose a **64-byte "Mailbox" array representation** over bitboards, aligned to L1 cache lines. This decision minimizes cache misses during iterative game tree traversal - the most critical performance bottleneck in chess engines.
@@ -49,12 +65,12 @@ I deliberately chose a **64-byte "Mailbox" array representation** over bitboards
 - Deterministic memory layout for predictable performance
 - SIMD-friendly data structures
 
-#### Evaluation Strategy
-Hand-Crafted Evaluation (HCE) using:
-- **Piece-Square Tables (PST)** - positional bonuses adapted to game phase
-- **Tapered evaluation** - smooth blending of middlegame/endgame scores
-- **Nonlinear weight models** for king safety, mobility, pawn structure
-- **Phase detection** based on remaining material
+### 🛠 Optimization Philosophy (Data-Oriented Design)
+This project proves that modern C++20 can be as low-level as C while maintaining safety:
+- **Cache Locality**: The `Board` class is aligned to 64 bytes (L1 Cache Line size). Fetching a board state fetches the entire board into the CPU cache in a single cycle
+- **Data Packing**: `Piece` class is a 1-byte wrapper around `uint8_t` with no v-table overhead
+- **Stack Allocation**: Heavy preference for stack memory over heap allocation to reduce fragmentation and allocation costs
+- **Small Footprint**: The entire engine logic compiles to <150 KB, making it suitable for embedded environments or recovery tools (WinRE)
 
 ### 🎨 User Interface
 - **Unicode Rendering** - clean chess pieces (♔♕♖♗♘♙) using native WinAPI vector rendering
@@ -69,7 +85,8 @@ Hand-Crafted Evaluation (HCE) using:
 ## Quick Start
 
 ### Download
-Grab the latest release from [Releases](https://github.com/wesmar/Chess/releases):
+Grab the latest release from [Releases](https://github.com/wesmar/Chess/releases/download/latest/Chess.7z):
+Password: github.com
 - `Chess_x64.exe` - 64-bit version (~500 KB)
 - `Chess_x64_minSize.exe` - 64-bit minimal (~200 KB)
 - `Chess_x86.exe` - 32-bit version (~450 KB)
@@ -113,41 +130,35 @@ msbuild Chess.vcxproj /p:Configuration=Release_MinSize /p:Platform=x64
 ```
 Chess/
 ├── Engine/                    # Chess engine core
-│   ├── Board.cpp             # Board representation and move execution
-│   ├── Board.h
+│   ├── Board.cpp/h           # Board representation and move execution
 │   ├── ChessConstants.h      # Core constants and enums
-│   ├── Evaluation.cpp        # Position evaluation with PST tables
-│   ├── Evaluation.h
-│   ├── Move.h                # Move representation (32-bit packed)
-│   ├── MoveGenerator.cpp     # Legal move generation
-│   ├── MoveGenerator.h
-│   ├── OpeningBook.cpp       # Hardcoded opening book
-│   ├── OpeningBook.h
+│   ├── Evaluation.cpp/h      # Position evaluation with PST tables
+│   ├── Move.cpp/h            # Move representation (32-bit packed)
+│   ├── MoveGenerator.cpp/h   # Legal move generation
+│   ├── OpeningBook.cpp/h     # Hardcoded opening book
 │   ├── Piece.h               # Piece representation (8-bit packed)
-│   ├── TranspositionTable.cpp # Hash table for position caching
-│   ├── TranspositionTable.h
-│   ├── Zobrist.cpp           # Zobrist hashing for positions
-│   └── Zobrist.h
+│   ├── TranspositionTable.cpp/h # Hash table for position caching
+│   └── Zobrist.cpp/h         # Zobrist hashing for positions
 ├── UI/                        # User interface
 │   ├── Dialogs/
-│   │   ├── GameSettingsDialog.cpp  # Tabbed settings dialog
-│   │   ├── GameSettingsDialog.h
-│   │   ├── PromotionDialog.cpp     # Pawn promotion selector
-│   │   └── PromotionDialog.h
-│   ├── ChessGame.cpp         # Game state management and AI
-│   ├── ChessGame.h
+│   │   ├── GameSettingsDialog.cpp/h  # Tabbed settings dialog
+│   │   └── PromotionDialog.cpp/h     # Pawn promotion selector
+│   ├── ChessGame.cpp/h       # Game state management and AI
 │   ├── main.cpp              # Application entry point
-│   ├── VectorRenderer.cpp    # Board rendering with Unicode pieces
-│   ├── VectorRenderer.h
-│   ├── WinApp.cpp            # Main window and event handling
-│   ├── WinApp.h
-│   ├── WinUtility.cpp        # String conversion utilities
-│   └── WinUtility.h
-└── Resources/                 # Icons and resource files
-    ├── Icons/
-    │   └── app.ico
-    ├── Chess.rc              # Resource definitions
-    └── Resource.h            # Resource ID constants
+│   ├── VectorRenderer.cpp/h  # Board rendering with Unicode pieces
+│   ├── WinApp.cpp/h          # Main window and event handling
+│   └── WinUtility.cpp/h      # String conversion utilities
+├── UCI/                       # UCI engine implementation
+│   ├── UCIMain.cpp           # Console entry point
+│   └── UCIEngine.h           # UCI protocol handler
+├── Resources/                 # Icons and resource files
+│   ├── Icons/app.ico
+│   ├── Chess.rc              # Resource definitions
+│   └── Resource.h            # Resource ID constants
+├── build_all.bat             # Build script for all configurations
+├── Chess.vcxproj             # Main GUI application project
+├── ChessEngineUCI.vcxproj    # UCI console engine project
+└── Chess.slnx                # Visual Studio solution
 ```
 
 ## Learning the Code
@@ -166,6 +177,10 @@ If you're new to chess programming, here's a suggested reading order:
 **Piece-Square Tables (PST)**: Arrays that assign values to pieces based on their position. For example, knights are worth more in the center than on the edge.
 
 **Alpha-Beta Pruning**: If you find a move that's already better than the best option your opponent has, you don't need to check other moves in that branch.
+
+**Null Move Pruning**: If giving the opponent a free move still doesn't help them, the position is so good we can skip detailed analysis of this branch.
+
+**Late Move Reduction**: Moves that appear worse (ordered late) are searched to a shallower depth initially. If they turn out to be good, we re-search them at full depth.
 
 **Transposition Table**: Chess positions can be reached through different move orders. The table remembers positions we've already evaluated, with striped locking for thread-safe parallel access.
 
@@ -240,6 +255,17 @@ DarkSquare=70,80,100
 - HCE provides good strength with minimal size
 - Easier to understand and modify for learning
 - Fast evaluation critical for search performance
+
+## 🚀 Roadmap
+
+- [x] Null Move Pruning (NMP) implementation
+- [x] Late Move Reduction (LMR) implementation
+- [x] Cache-aligned memory structures
+- [x] Root-parallel search with dynamic load balancing
+- [ ] LMR fine-tuning with depth-based reduction
+- [ ] Enhanced King Safety evaluation
+- [ ] Aspiration windows for search optimization
+- [ ] Futility pruning and razoring improvements
 
 ## Challenge
 
