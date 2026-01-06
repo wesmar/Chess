@@ -284,7 +284,7 @@ namespace Chess
         Move bestMoveSoFar = legalMoves[0];
         int bestScore = -INFINITY_SCORE;
 
-        // Iterative deepening with root-parallel search
+        // Iterative deepening with root-parallel search and aspiration windows
         for (int depth = 1; depth <= MAX_DEPTH; ++depth)
         {
             if (ShouldStop()) break;
@@ -293,7 +293,36 @@ namespace Chess
             OrderMoves(legalMoves, searchBoard, bestMoveSoFar, 0);
 
             searchBoard.MakeMoveUnchecked(legalMoves[0]);
-            int pvScore = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, INFINITY_SCORE, 1);
+
+            int pvScore;
+
+            // Aspiration windows: use narrow window for depth >= 4 based on previous score
+            // This significantly improves alpha-beta cutoffs in iterative deepening
+            if (depth >= 4 && bestScore > -MATE_SCORE + 1000 && bestScore < MATE_SCORE - 1000)
+            {
+                const int ASPIRATION_WINDOW = 50; // Centipawns
+                int alpha = bestScore - ASPIRATION_WINDOW;
+                int beta = bestScore + ASPIRATION_WINDOW;
+
+                pvScore = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+
+                // Fail-low: score dropped below window, re-search with lower bound
+                if (pvScore <= alpha && !ShouldStop())
+                {
+                    pvScore = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, -alpha, 1);
+                }
+                // Fail-high: score exceeded window, re-search with upper bound
+                else if (pvScore >= beta && !ShouldStop())
+                {
+                    pvScore = -AlphaBeta(searchBoard, depth - 1, -beta, INFINITY_SCORE, 1);
+                }
+            }
+            else
+            {
+                // Use full window for shallow depths or mate scores
+                pvScore = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, INFINITY_SCORE, 1);
+            }
+
             searchBoard.UndoMove();
 
             if (ShouldStop()) break;
@@ -414,6 +443,15 @@ namespace Chess
             return 0; // Draw score
         }
 
+        // Mate distance pruning - don't search for mates longer than already found
+        // If we found mate in 5 moves, no point searching for mate in 8 moves
+        // This ensures the engine always prefers the shortest mate sequence
+        int mateAlpha = -MATE_SCORE + ply;
+        int mateBeta = MATE_SCORE - ply - 1;
+        if (alpha < mateAlpha) alpha = mateAlpha;
+        if (beta > mateBeta) beta = mateBeta;
+        if (alpha >= beta) return alpha;
+
 		// Futility pruning - skip nodes unlikely to raise alpha
         // In positions far below alpha with little depth remaining, trying to improve
         // the score is futile. Skip full search and return approximate value.
@@ -506,15 +544,28 @@ namespace Chess
         // Search all legal moves
         for (const auto& move : moves)
         {
-            board.MakeMoveUnchecked(move);
-
-            int score;
-
             // Check if move is quiet (not tactical)
             bool isQuiet = !move.IsCapture() &&
                            !move.IsPromotion() &&
                            !move.IsEnPassant() &&
                            !move.IsCastling();
+
+            // Late Move Pruning (LMP) - skip late quiet moves entirely
+            // More aggressive than LMR: we don't search these moves at all
+            // Formula: allow 4 + depth*depth moves before pruning starts
+            // Only safe when: shallow depth, not in check, move is quiet
+            if (depth <= 6 &&
+                moveIndex >= (4 + depth * depth) &&
+                !sideInCheck &&
+                isQuiet)
+            {
+                moveIndex++;
+                continue; // Skip this move completely
+            }
+
+            board.MakeMoveUnchecked(move);
+
+            int score;
 
 			// Late Move Reduction - reduce search depth for likely poor moves
 			// Only apply to quiet moves late in move ordering when not in check
@@ -641,6 +692,15 @@ namespace Chess
             alpha = standPat;
         }
 
+        // Delta pruning: if position is too bad, even best possible capture won't help
+        // Use queen value (900) + margin (200) for safety (accounts for promotions)
+        const int QUEEN_VALUE = 900;
+        const int DELTA_MARGIN = 200;
+        if (standPat + QUEEN_VALUE + DELTA_MARGIN < alpha)
+        {
+            return alpha; // Position hopeless, skip tactical search
+        }
+
         MoveList pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
             board.GetPieces(),
             board.GetSideToMove(),
@@ -708,6 +768,15 @@ namespace Chess
             return 0;
         }
 
+        // Mate distance pruning - don't search for mates longer than already found
+        // If we found mate in 5 moves, no point searching for mate in 8 moves
+        // This ensures the engine always prefers the shortest mate sequence
+        int mateAlpha = -MATE_SCORE + ply;
+        int mateBeta = MATE_SCORE - ply - 1;
+        if (alpha < mateAlpha) alpha = mateAlpha;
+        if (beta > mateBeta) beta = mateBeta;
+        if (alpha >= beta) return alpha;
+
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
         int ttScore;
@@ -768,11 +837,25 @@ namespace Chess
         {
             if ((moveIndex & 15) == 0 && ShouldStop()) break;
 
+            bool isQuiet = !move.IsCapture() && !move.IsPromotion() &&
+                           !move.IsEnPassant() && !move.IsCastling();
+
+            // Late Move Pruning (LMP) - skip late quiet moves entirely
+            // More aggressive than LMR: we don't search these moves at all
+            // Formula: allow 4 + depth*depth moves before pruning starts
+            // Only safe when: shallow depth, not in check, move is quiet
+            if (depth <= 6 &&
+                moveIndex >= (4 + depth * depth) &&
+                !sideInCheck &&
+                isQuiet)
+            {
+                moveIndex++;
+                continue; // Skip this move completely
+            }
+
             board.MakeMoveUnchecked(move);
 
             int score;
-            bool isQuiet = !move.IsCapture() && !move.IsPromotion() &&
-                           !move.IsEnPassant() && !move.IsCastling();
 
             bool applyLMR = depth >= 3 && moveIndex >= 4 && !sideInCheck && isQuiet;
 
@@ -867,6 +950,15 @@ namespace Chess
         int standPat = Evaluate(board);
         if (standPat >= beta) return beta;
         if (standPat > alpha) alpha = standPat;
+
+        // Delta pruning: if position is too bad, even best possible capture won't help
+        // Use queen value (900) + margin (200) for safety (accounts for promotions)
+        const int QUEEN_VALUE = 900;
+        const int DELTA_MARGIN = 200;
+        if (standPat + QUEEN_VALUE + DELTA_MARGIN < alpha)
+        {
+            return alpha; // Position hopeless, skip tactical search
+        }
 
         auto moves = board.GenerateLegalMoves();
         MoveList tacticalMoves;
@@ -1039,6 +1131,15 @@ namespace Chess
             return 0;
         }
 
+        // Mate distance pruning - don't search for mates longer than already found
+        // If we found mate in 5 moves, no point searching for mate in 8 moves
+        // This ensures the engine always prefers the shortest mate sequence
+        int mateAlpha = -MATE_SCORE + ply;
+        int mateBeta = MATE_SCORE - ply - 1;
+        if (alpha < mateAlpha) alpha = mateAlpha;
+        if (beta > mateBeta) beta = mateBeta;
+        if (alpha >= beta) return alpha;
+
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
         int ttScore;
@@ -1094,14 +1195,27 @@ namespace Chess
 
         for (const auto& move : moves)
         {
-            board.MakeMoveUnchecked(move);
-
-            int score;
-
             bool isQuiet = !move.IsCapture() &&
                            !move.IsPromotion() &&
                            !move.IsEnPassant() &&
                            !move.IsCastling();
+
+            // Late Move Pruning (LMP) - skip late quiet moves entirely
+            // More aggressive than LMR: we don't search these moves at all
+            // Formula: allow 4 + depth*depth moves before pruning starts
+            // Only safe when: shallow depth, not in check, move is quiet
+            if (depth <= 6 &&
+                moveIndex >= (4 + depth * depth) &&
+                !sideInCheck &&
+                isQuiet)
+            {
+                moveIndex++;
+                continue; // Skip this move completely
+            }
+
+            board.MakeMoveUnchecked(move);
+
+            int score;
 
             bool applyLMR = depth >= 3 &&
                             moveIndex >= 4 &&
@@ -1203,6 +1317,15 @@ namespace Chess
         if (standPat > alpha)
         {
             alpha = standPat;
+        }
+
+        // Delta pruning: if position is too bad, even best possible capture won't help
+        // Use queen value (900) + margin (200) for safety (accounts for promotions)
+        const int QUEEN_VALUE = 900;
+        const int DELTA_MARGIN = 200;
+        if (standPat + QUEEN_VALUE + DELTA_MARGIN < alpha)
+        {
+            return alpha; // Position hopeless, skip tactical search
         }
 
         MoveList pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
