@@ -6,6 +6,7 @@
 #include "../Engine/Board.h"
 #include "VectorRenderer.h"
 #include "../Engine/TranspositionTable.h"
+#include "../Engine/Neural/HybridEvaluator.h"
 #include <chrono>
 #include <memory>
 #include <vector>
@@ -67,6 +68,17 @@ namespace Chess
         // Used when user stops analysis or game ends
         void AbortSearch();
 
+        // Load NNUE network for neural evaluation
+        // @param filename: Path to .nnue file
+        // @return: true if loading succeeded
+        bool LoadNnue(const std::string& filename);
+
+        // Check if NNUE is available
+        bool IsNnueAvailable() const { return m_evaluator.IsNnueAvailable(); }
+
+        // Get evaluator for direct access
+        Neural::HybridEvaluator& GetEvaluator() { return m_evaluator; }
+
     private:
         DifficultyLevel m_difficulty;
         std::chrono::steady_clock::time_point m_searchStartTime;
@@ -83,6 +95,9 @@ namespace Chess
 
         int m_numThreads = 1;               // Parallel search threads
         std::atomic<bool> m_abortSearch{false};  // Search abort flag
+
+        // NNUE evaluator (hybrid mode with classical fallback)
+        Neural::HybridEvaluator m_evaluator;
 
         // Thread-local heuristics to prevent data races
         struct ThreadLocalData {

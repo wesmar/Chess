@@ -33,15 +33,26 @@
     <ClInclude Include="UI\WinUtility.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Engine\Board.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\ChessConstants.h"><Filter>Engine</Filter></ClInclude>
-    <ClInclude Include="Engine\OpeningBook.h"><Filter>Engine</Filter></ClInclude>
-    <ClInclude Include="Engine\Move.h"><Filter>Engine</Filter></ClInclude>
-    <ClInclude Include="Engine\Piece.h"><Filter>Engine</Filter></ClInclude>
-    <ClInclude Include="Engine\Zobrist.h"><Filter>Engine</Filter></ClInclude>
-    <ClInclude Include="Engine\TranspositionTable.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\Evaluation.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Move.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\MoveGenerator.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\Activations.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\DenseLayer.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\FeatureAccumulator.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\FeatureExtractor.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\HybridEvaluator.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\Neural.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\NeuralEvaluator.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\SimdOperations.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\Transformer.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Neural\WeightLoader.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\OpeningBook.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Piece.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\TranspositionTable.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Engine\Zobrist.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Resources\Resource.h"><Filter>Resources</Filter></ClInclude>
     <ClInclude Include="UCI\UCIEngine.h"><Filter>UCI</Filter></ClInclude>
-  </ItemGroup>
+   </ItemGroup>
+
   <ItemGroup><ResourceCompile Include="Resources\Chess.rc"><Filter>Resources</Filter></ResourceCompile></ItemGroup>
 </Project>

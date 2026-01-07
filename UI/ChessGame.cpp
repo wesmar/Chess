@@ -62,6 +62,11 @@ namespace Chess
                 }
             }
         }
+
+        if (m_evaluator.LoadNnue("nn-small.nnue"))
+        {
+            m_evaluator.SetMode(Neural::EvalMode::Classical);
+        }
     }
 
     // Update AI difficulty and resize transposition table accordingly
@@ -96,6 +101,11 @@ namespace Chess
         // Signal all search threads to stop as soon as possible.
         // The search loops check this flag periodically and will exit.
         m_abortSearch.store(true, std::memory_order_release);
+    }
+
+    bool AIPlayer::LoadNnue(const std::string& filename)
+    {
+        return m_evaluator.LoadNnue(filename);
     }
 
     // Assign score to move for move ordering optimization
@@ -208,6 +218,9 @@ namespace Chess
         m_abortSearch.store(false, std::memory_order_release);
         m_searchStartTime = std::chrono::steady_clock::now();
         m_maxSearchTimeMs = maxTimeMs;
+
+        // Reset NNUE accumulator state for new search
+        m_evaluator.PrepareSearch();
 
         // Set search time based on difficulty level
         if (m_difficulty <= 2)
@@ -458,7 +471,7 @@ namespace Chess
         // Only apply when not in check (dangerous positions need full analysis)
         if (m_difficulty > 6 && depth <= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
         {
-            int staticEval = Evaluate(board);
+            int staticEval = m_evaluator.Evaluate(board);
             int futilityMargin = 200 * depth;  // Larger margin for deeper positions
 
             if (staticEval + futilityMargin <= alpha)
@@ -472,7 +485,7 @@ namespace Chess
         // has better alternatives earlier in tree. Reduce search depth.
         if (m_difficulty > 6 && depth <= 2 && !board.IsInCheck(board.GetCurrentPlayer()))
         {
-            int staticEval = Evaluate(board);
+            int staticEval = m_evaluator.Evaluate(board);
             if (staticEval - 150 >= beta)
             {
                 return beta;  // Position too good, opponent won't allow this line
@@ -494,12 +507,42 @@ namespace Chess
             return QuiescenceSearch(board, alpha, beta, ply, 0);
         }
 
-        // Generate legal moves for current position
-        auto moves = board.GenerateLegalMoves();
+        // Generate pseudo-legal moves for current position
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+            ? PlayerColor::Black : PlayerColor::White;
+
+        const auto& castlingRights = board.GetCastlingRights();
+        const auto& pieceList = board.GetPieceList(sideToMove);
+
+        MoveList pseudoMoves = MoveGenerator::GeneratePseudoLegalMoves(
+            board.GetPieces(),
+            sideToMove,
+            board.GetEnPassantSquare(),
+            &castlingRights,
+            &pieceList
+        );
+
+        // Filter for legal moves using Make/Undo approach
+        MoveList moves;
+        for (const Move& move : pseudoMoves)
+        {
+            board.MakeMoveUnchecked(move);
+            int kingSquare = board.GetKingSquare(sideToMove);
+
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                board.GetPieces(), kingSquare, opponentColor))
+            {
+                moves.push_back(move);
+            }
+
+            board.UndoMove();
+        }
+
         if (moves.empty())
         {
             // No legal moves - checkmate or stalemate
-            if (board.IsInCheck(board.GetCurrentPlayer()))
+            if (board.IsInCheck(sideToMove))
             {
                 return -MATE_SCORE + ply; // Checkmate (prefer shorter mates)
             }
@@ -510,7 +553,7 @@ namespace Chess
 		// In positions with low material (phase < 64), zugzwang is common
 		// and null-move can produce false beta cutoffs
 		int phase = ComputePhase(board);
-		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
 		{
 			const int R = 2;
 			board.MakeNullMoveUnchecked();
@@ -523,7 +566,6 @@ namespace Chess
 			}
 		}
 
-        const PlayerColor sideToMove = board.GetCurrentPlayer();
         const int sideIndex = static_cast<int>(sideToMove);
 
         OrderMoves(moves, board, ttMove, ply);
@@ -532,7 +574,7 @@ namespace Chess
         int bestScore = -INFINITY_SCORE;
         uint8_t flag = TT_ALPHA;
 
-        bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+        bool sideInCheck = board.IsInCheck(sideToMove);
 
         if (sideInCheck && ply < MAX_PLY - 1)
         {
@@ -563,6 +605,7 @@ namespace Chess
                 continue; // Skip this move completely
             }
 
+            m_evaluator.OnMakeMove();
             board.MakeMoveUnchecked(move);
 
             int score;
@@ -592,6 +635,7 @@ namespace Chess
             }
 
             board.UndoMove();
+            m_evaluator.OnUndoMove();
 
             if (score > bestScore)
             {
@@ -638,7 +682,7 @@ namespace Chess
         // Check time and depth limits
         if (ShouldStop() || qDepth >= 8)
         {
-            return Evaluate(board);
+            return m_evaluator.Evaluate(board);
         }
 
         const PlayerColor sideToMove = board.GetCurrentPlayer();
@@ -646,7 +690,36 @@ namespace Chess
         // If in check, we must search all evasions (stand-pat is illegal in check)
         if (board.IsInCheck(sideToMove))
         {
-            auto evasions = board.GenerateLegalMoves();
+            const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+                ? PlayerColor::Black : PlayerColor::White;
+
+            const auto& castlingRights = board.GetCastlingRights();
+            const auto& pieceList = board.GetPieceList(sideToMove);
+
+            MoveList pseudoEvasions = MoveGenerator::GeneratePseudoLegalMoves(
+                board.GetPieces(),
+                sideToMove,
+                board.GetEnPassantSquare(),
+                &castlingRights,
+                &pieceList
+            );
+
+            // Filter for legal moves using Make/Undo approach
+            MoveList evasions;
+            for (const Move& move : pseudoEvasions)
+            {
+                board.MakeMoveUnchecked(move);
+                int kingSquare = board.GetKingSquare(sideToMove);
+
+                if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                    board.GetPieces(), kingSquare, opponentColor))
+                {
+                    evasions.push_back(move);
+                }
+
+                board.UndoMove();
+            }
+
             if (evasions.empty())
             {
                 return -MATE_SCORE + ply; // Checkmated
@@ -658,11 +731,13 @@ namespace Chess
 
             for (const auto& move : evasions)
             {
+                m_evaluator.OnMakeMove();
                 board.MakeMoveUnchecked(move);
 
                 int score = -QuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
 
                 board.UndoMove();
+                m_evaluator.OnUndoMove();
 
                 if (score > best) best = score;
 
@@ -680,7 +755,7 @@ namespace Chess
         }
 
         // Not in check: normal stand-pat logic
-        int standPat = Evaluate(board);
+        int standPat = m_evaluator.Evaluate(board);
 
         if (standPat >= beta)
         {
@@ -732,11 +807,13 @@ namespace Chess
 
         for (const auto& move : tacticalMoves)
         {
+            m_evaluator.OnMakeMove();
             board.MakeMoveUnchecked(move);
 
             int score = -QuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
 
             board.UndoMove();
+            m_evaluator.OnUndoMove();
 
             if (score >= beta)
             {
@@ -790,10 +867,40 @@ namespace Chess
             return WorkerQuiescence(board, alpha, beta, ply, 0, tld);
         }
 
-        auto moves = board.GenerateLegalMoves();
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+            ? PlayerColor::Black : PlayerColor::White;
+
+        const auto& castlingRights = board.GetCastlingRights();
+        const auto& pieceList = board.GetPieceList(sideToMove);
+
+        MoveList pseudoMoves = MoveGenerator::GeneratePseudoLegalMoves(
+            board.GetPieces(),
+            sideToMove,
+            board.GetEnPassantSquare(),
+            &castlingRights,
+            &pieceList
+        );
+
+        // Filter for legal moves using Make/Undo approach
+        MoveList moves;
+        for (const Move& move : pseudoMoves)
+        {
+            board.MakeMoveUnchecked(move);
+            int kingSquare = board.GetKingSquare(sideToMove);
+
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                board.GetPieces(), kingSquare, opponentColor))
+            {
+                moves.push_back(move);
+            }
+
+            board.UndoMove();
+        }
+
         if (moves.empty())
         {
-            if (board.IsInCheck(board.GetCurrentPlayer()))
+            if (board.IsInCheck(sideToMove))
             {
                 return -MATE_SCORE + ply;
             }
@@ -802,7 +909,7 @@ namespace Chess
 
 		// Null move pruning - disabled in endgames to avoid zugzwang errors
 		int phase = ComputePhase(board);
-		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
 		{
 			const int R = 2;
 			board.MakeNullMoveUnchecked();
@@ -815,7 +922,6 @@ namespace Chess
 			}
 		}
 
-        const PlayerColor sideToMove = board.GetCurrentPlayer();
         const int sideIndex = static_cast<int>(sideToMove);
 
         OrderMovesWorker(moves, board, ttMove, ply, tld);
@@ -824,7 +930,7 @@ namespace Chess
         int bestScore = -INFINITY_SCORE;
         uint8_t flag = TT_ALPHA;
 
-        bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+        bool sideInCheck = board.IsInCheck(sideToMove);
 
         if (sideInCheck && ply < MAX_PLY - 1)
         {
@@ -914,16 +1020,46 @@ namespace Chess
     int AIPlayer::WorkerQuiescence(Board& board, int alpha, int beta, int ply, int qDepth,
                                     ThreadLocalData& tld)
     {
+        // Worker threads use classical evaluation for thread safety
         if (ShouldStop() || qDepth >= 8)
         {
-            return Evaluate(board);
+            return Chess::Evaluate(board);
         }
 
         const PlayerColor sideToMove = board.GetCurrentPlayer();
 
         if (board.IsInCheck(sideToMove))
         {
-            auto evasions = board.GenerateLegalMoves();
+            const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+                ? PlayerColor::Black : PlayerColor::White;
+
+            const auto& castlingRights = board.GetCastlingRights();
+            const auto& pieceList = board.GetPieceList(sideToMove);
+
+            MoveList pseudoEvasions = MoveGenerator::GeneratePseudoLegalMoves(
+                board.GetPieces(),
+                sideToMove,
+                board.GetEnPassantSquare(),
+                &castlingRights,
+                &pieceList
+            );
+
+            // Filter for legal moves using Make/Undo approach
+            MoveList evasions;
+            for (const Move& move : pseudoEvasions)
+            {
+                board.MakeMoveUnchecked(move);
+                int kingSquare = board.GetKingSquare(sideToMove);
+
+                if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                    board.GetPieces(), kingSquare, opponentColor))
+                {
+                    evasions.push_back(move);
+                }
+
+                board.UndoMove();
+            }
+
             if (evasions.empty())
             {
                 return -MATE_SCORE + ply;
@@ -947,7 +1083,8 @@ namespace Chess
             return alpha;
         }
 
-        int standPat = Evaluate(board);
+        // Worker threads use classical evaluation for thread safety
+        int standPat = Chess::Evaluate(board);
         if (standPat >= beta) return beta;
         if (standPat > alpha) alpha = standPat;
 
@@ -960,20 +1097,35 @@ namespace Chess
             return alpha; // Position hopeless, skip tactical search
         }
 
-        auto moves = board.GenerateLegalMoves();
-        MoveList tacticalMoves;
+        // Generate tactical moves and filter for legality
+        MoveList tacticalMoves = MoveGenerator::GenerateTacticalMoves(
+            board.GetPieces(),
+            sideToMove,
+            board.GetEnPassantSquare(),
+            &board.GetPieceList(sideToMove)
+        );
 
-        for (const auto& move : moves)
+        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+            ? PlayerColor::Black : PlayerColor::White;
+
+        MoveList legalTacticalMoves;
+        for (const Move& move : tacticalMoves)
         {
-            if (move.IsCapture() || move.IsPromotion())
+            board.MakeMoveUnchecked(move);
+            int kingSquare = board.GetKingSquare(sideToMove);
+
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                board.GetPieces(), kingSquare, opponentColor))
             {
-                tacticalMoves.push_back(move);
+                legalTacticalMoves.push_back(move);
             }
+
+            board.UndoMove();
         }
 
-        OrderMovesWorker(tacticalMoves, board, Move(), ply, tld);
+        OrderMovesWorker(legalTacticalMoves, board, Move(), ply, tld);
 
-        for (const auto& move : tacticalMoves)
+        for (const auto& move : legalTacticalMoves)
         {
             board.MakeMoveUnchecked(move);
             int score = -WorkerQuiescence(board, -beta, -alpha, ply + 1, qDepth + 1, tld);
@@ -1153,10 +1305,40 @@ namespace Chess
             return HelperQuiescenceSearch(board, alpha, beta, ply, 0);
         }
 
-        auto moves = board.GenerateLegalMoves();
+        const PlayerColor sideToMove = board.GetCurrentPlayer();
+        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+            ? PlayerColor::Black : PlayerColor::White;
+
+        const auto& castlingRights = board.GetCastlingRights();
+        const auto& pieceList = board.GetPieceList(sideToMove);
+
+        MoveList pseudoMoves = MoveGenerator::GeneratePseudoLegalMoves(
+            board.GetPieces(),
+            sideToMove,
+            board.GetEnPassantSquare(),
+            &castlingRights,
+            &pieceList
+        );
+
+        // Filter for legal moves using Make/Undo approach
+        MoveList moves;
+        for (const Move& move : pseudoMoves)
+        {
+            board.MakeMoveUnchecked(move);
+            int kingSquare = board.GetKingSquare(sideToMove);
+
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                board.GetPieces(), kingSquare, opponentColor))
+            {
+                moves.push_back(move);
+            }
+
+            board.UndoMove();
+        }
+
         if (moves.empty())
         {
-            if (board.IsInCheck(board.GetCurrentPlayer()))
+            if (board.IsInCheck(sideToMove))
             {
                 return -MATE_SCORE + ply;
             }
@@ -1165,7 +1347,7 @@ namespace Chess
 
 		// Null move pruning - disabled in endgames to avoid zugzwang errors
 		int phase = ComputePhase(board);
-		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(board.GetCurrentPlayer()))
+		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
 		{
 			const int R = 2;
 			board.MakeNullMoveUnchecked();
@@ -1184,7 +1366,7 @@ namespace Chess
         int bestScore = -INFINITY_SCORE;
         uint8_t flag = TT_ALPHA;
 
-        bool sideInCheck = board.IsInCheck(board.GetCurrentPlayer());
+        bool sideInCheck = board.IsInCheck(sideToMove);
 
         if (sideInCheck && ply < MAX_PLY - 1)
         {
@@ -1265,16 +1447,46 @@ namespace Chess
 
     int AIPlayer::HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth)
     {
+        // Helper threads use classical evaluation for thread safety
         if (m_abortSearch.load() || qDepth >= 8)
         {
-            return Evaluate(board);
+            return Chess::Evaluate(board);
         }
 
         const PlayerColor sideToMove = board.GetCurrentPlayer();
 
         if (board.IsInCheck(sideToMove))
         {
-            auto evasions = board.GenerateLegalMoves();
+            const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+                ? PlayerColor::Black : PlayerColor::White;
+
+            const auto& castlingRights = board.GetCastlingRights();
+            const auto& pieceList = board.GetPieceList(sideToMove);
+
+            MoveList pseudoEvasions = MoveGenerator::GeneratePseudoLegalMoves(
+                board.GetPieces(),
+                sideToMove,
+                board.GetEnPassantSquare(),
+                &castlingRights,
+                &pieceList
+            );
+
+            // Filter for legal moves using Make/Undo approach
+            MoveList evasions;
+            for (const Move& move : pseudoEvasions)
+            {
+                board.MakeMoveUnchecked(move);
+                int kingSquare = board.GetKingSquare(sideToMove);
+
+                if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                    board.GetPieces(), kingSquare, opponentColor))
+                {
+                    evasions.push_back(move);
+                }
+
+                board.UndoMove();
+            }
+
             if (evasions.empty())
             {
                 return -MATE_SCORE + ply;
@@ -1307,7 +1519,8 @@ namespace Chess
             return alpha;
         }
 
-        int standPat = Evaluate(board);
+        // Helper threads use classical evaluation for thread safety
+        int standPat = Chess::Evaluate(board);
 
         if (standPat >= beta)
         {
@@ -1330,29 +1543,27 @@ namespace Chess
 
         MoveList pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
             board.GetPieces(),
-            board.GetSideToMove(),
+            sideToMove,
             board.GetEnPassantSquare(),
-            &board.GetPieceList(board.GetSideToMove())
+            &board.GetPieceList(sideToMove)
         );
 
+        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
+            ? PlayerColor::Black : PlayerColor::White;
+
         MoveList tacticalMoves;
-
-        PlayerColor movedColor = board.GetSideToMove();
-        PlayerColor opponentColor = (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
-        Board temp = board;
-
-        for (const auto& move : pseudoTacticalMoves)
+        for (const Move& move : pseudoTacticalMoves)
         {
-            temp.MakeMoveUnchecked(move);
+            board.MakeMoveUnchecked(move);
+            int kingSquare = board.GetKingSquare(sideToMove);
 
-            int kingSquare = temp.GetKingSquare(movedColor);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(temp.GetPieces(), kingSquare, opponentColor))
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                board.GetPieces(), kingSquare, opponentColor))
             {
                 tacticalMoves.push_back(move);
             }
 
-            temp.UndoMove();
+            board.UndoMove();
         }
 
         OrderMovesSimple(tacticalMoves, board, Move());

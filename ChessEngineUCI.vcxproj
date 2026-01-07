@@ -77,14 +77,24 @@
     <ClInclude Include="UCI\UCIEngine.h" />
     <ClInclude Include="UI\ChessGame.h" />
     <ClInclude Include="Engine\Board.h" />
-    <ClInclude Include="Engine\OpeningBook.h" />
     <ClInclude Include="Engine\ChessConstants.h" />
-    <ClInclude Include="Engine\Move.h" />
-    <ClInclude Include="Engine\Piece.h" />
-    <ClInclude Include="Engine\Zobrist.h" />
-    <ClInclude Include="Engine\TranspositionTable.h" />
     <ClInclude Include="Engine\Evaluation.h" />
+    <ClInclude Include="Engine\Move.h" />
     <ClInclude Include="Engine\MoveGenerator.h" />
+    <ClInclude Include="Engine\Neural\Activations.h" />
+    <ClInclude Include="Engine\Neural\DenseLayer.h" />
+    <ClInclude Include="Engine\Neural\FeatureAccumulator.h" />
+    <ClInclude Include="Engine\Neural\FeatureExtractor.h" />
+    <ClInclude Include="Engine\Neural\HybridEvaluator.h" />
+    <ClInclude Include="Engine\Neural\Neural.h" />
+    <ClInclude Include="Engine\Neural\NeuralEvaluator.h" />
+    <ClInclude Include="Engine\Neural\SimdOperations.h" />
+    <ClInclude Include="Engine\Neural\Transformer.h" />
+    <ClInclude Include="Engine\Neural\WeightLoader.h" />
+    <ClInclude Include="Engine\OpeningBook.h" />
+    <ClInclude Include="Engine\Piece.h" />
+    <ClInclude Include="Engine\TranspositionTable.h" />
+    <ClInclude Include="Engine\Zobrist.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

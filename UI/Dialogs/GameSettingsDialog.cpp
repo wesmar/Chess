@@ -501,6 +501,7 @@ namespace Chess
         if (settings.numThreads > 64) settings.numThreads = 64;
         
         settings.autoPromoteQueen = GetPrivateProfileInt(L"Game", L"AutoPromoteQueen", 1, iniPath.c_str()) != 0;
+        settings.useNeuralEval = GetPrivateProfileInt(L"Game", L"UseNeuralEval", 0, iniPath.c_str()) != 0;
 
         // Load appearance settings
         wchar_t langBuffer[64] = {};
@@ -564,6 +565,8 @@ namespace Chess
         WritePrivateProfileString(L"Game", L"Threads",
             std::to_wstring(settings.numThreads).c_str(), iniPath.c_str());
         WritePrivateProfileString(L"Game", L"AutoPromoteQueen", settings.autoPromoteQueen ? L"1" : L"0", iniPath.c_str());
+        WritePrivateProfileString(L"Game", L"UseNeuralEval",
+            settings.useNeuralEval ? L"1" : L"0", iniPath.c_str());
 
         // Save appearance settings
         WritePrivateProfileString(L"Display", L"Language", settings.language.c_str(), iniPath.c_str());

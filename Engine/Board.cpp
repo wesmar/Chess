@@ -650,11 +650,17 @@ namespace Chess
         const uint64_t targetKey = m_zobristKey;
 
         // Search backward through move history
+        // Note: m_moveHistory[i].previousZobristKey stores the position BEFORE move i was made
+        // This allows us to compare the current position against all historical positions
         for (int i = m_historyPly - 1; i >= 0; --i)
         {
             const auto& record = m_moveHistory[i];
 
             // Stop at irreversible moves (these create a new "game tree")
+            // Positions before irreversible moves cannot repeat because:
+            // - Pawns cannot move backward
+            // - Captured pieces cannot be restored
+            // - Promotions cannot be undone
             if (record.move.IsCapture() ||
                 record.move.IsPromotion() ||
                 record.movedPiece.GetType() == PieceType::Pawn)
@@ -662,7 +668,9 @@ namespace Chess
                 break; // Can't repeat position before irreversible move
             }
 
-            // Check if position before this move matches current position
+            // Compare the position that existed before move i with the current position
+            // previousZobristKey was saved before making move i, so it represents
+            // a position that actually occurred in the game
             if (record.previousZobristKey == targetKey)
             {
                 count++;
@@ -1248,19 +1256,36 @@ namespace Chess
     bool FENParser::ParsePiecePlacement(const std::string& placement,
                                         std::array<Piece, SQUARE_COUNT>& board)
     {
-        int square = 56; // Start at a8 (rank 8, file a)
         board.fill(EMPTY_PIECE);
+
+        int rank = 7; // Start at rank 8 (index 7)
+        int file = 0; // Start at file a (index 0)
 
         for (char c : placement)
         {
             if (c == '/')
             {
-                square -= 16; // Move to start of next rank down (skip 8 back, skip 8 forward we added)
+                // End of rank - verify exactly 8 files were processed
+                if (file != 8)
+                    return false; // Rank overflow or underflow
+
+                // Move to next rank down
+                rank--;
+                file = 0;
+
+                // Check for too many ranks
+                if (rank < 0)
+                    return false;
             }
             else if (std::isdigit(static_cast<unsigned char>(c)))
             {
                 // Digit = number of empty squares
-                square += static_cast<int>(c - '0');
+                int emptyCount = static_cast<int>(c - '0');
+                file += emptyCount;
+
+                // Check for file overflow
+                if (file > 8)
+                    return false;
             }
             else
             {
@@ -1286,16 +1311,23 @@ namespace Chess
                     default: return false; // Invalid character
                 }
 
+                // Check for file overflow
+                if (file >= 8)
+                    return false;
+
+                // Calculate square index
+                int square = rank * 8 + file;
+
                 if (square < 0 || square >= SQUARE_COUNT)
                     return false;
 
                 board[square] = Piece(type, color);
-                square++;
+                file++;
             }
         }
 
-        // Should end at square 8 (off the board after rank 1)
-        if (square != 8)
+        // Final rank validation - should have exactly 8 files and be at rank 1 (index 0)
+        if (file != 8 || rank != 0)
             return false;
 
         return true;

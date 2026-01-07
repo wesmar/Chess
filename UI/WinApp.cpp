@@ -36,7 +36,7 @@ namespace Chess
 		// Load settings from INI file at startup
 		GameSettingsDialog::Settings settings;
 		GameSettingsDialog::LoadFromINI(settings);
-		
+
 		// Apply loaded UI preferences
 		m_uiSettings.showLegalMoves = settings.showLegalMoves;
 		m_uiSettings.showCoordinates = settings.showCoordinates;
@@ -44,10 +44,11 @@ namespace Chess
 		m_uiSettings.autoPromoteToQueen = settings.autoPromoteQueen;
 		m_uiSettings.animateMoves = settings.animateMoves;
 		m_uiSettings.animationSpeed = settings.animationSpeed;
-		
+
 		// Store current game mode and difficulty for menu management
 		m_currentGameMode = settings.gameMode;
 		m_currentDifficulty = settings.aiDifficulty;
+		m_useNeuralEval = settings.useNeuralEval;
 		
 		// Configure renderer with loaded visual settings
 		auto config = m_renderer.GetConfig();
@@ -105,7 +106,15 @@ namespace Chess
 		// Initialize game with correct mode after window is ready
 		m_game.SetGameMode(m_currentGameMode);
 		m_game.NewGame(m_currentGameMode);
-		
+
+		// Apply neural evaluation mode to AI players if they exist
+		if (m_game.GetCurrentAIPlayer())
+		{
+			m_game.GetCurrentAIPlayer()->GetEvaluator().SetMode(
+				m_useNeuralEval ? Chess::Neural::EvalMode::Auto
+								: Chess::Neural::EvalMode::Classical);
+		}
+
 		return true;
 	}
 
@@ -200,12 +209,16 @@ namespace Chess
 			CheckMenuItem(m_hMenu, IDM_DIFFICULTY_LEVEL_1 + m_currentDifficulty - 1, MF_CHECKED);
 			
 			// View options checkmarks
-			CheckMenuItem(m_hMenu, IDM_VIEW_FLIPBOARD, 
+			CheckMenuItem(m_hMenu, IDM_VIEW_FLIPBOARD,
 				m_uiSettings.flipBoard ? MF_CHECKED : MF_UNCHECKED);
-			CheckMenuItem(m_hMenu, IDM_VIEW_SHOWLEGAL, 
+			CheckMenuItem(m_hMenu, IDM_VIEW_SHOWLEGAL,
 				m_uiSettings.showLegalMoves ? MF_CHECKED : MF_UNCHECKED);
-			CheckMenuItem(m_hMenu, IDM_VIEW_SHOWCOORDS, 
+			CheckMenuItem(m_hMenu, IDM_VIEW_SHOWCOORDS,
 				m_uiSettings.showCoordinates ? MF_CHECKED : MF_UNCHECKED);
+
+			// Neural evaluation checkmark
+			CheckMenuItem(m_hMenu, IDM_GAME_USE_NEURAL,
+				m_useNeuralEval ? MF_CHECKED : MF_UNCHECKED);
 		}
 	}
 	void MainWindow::CreateStatusBar()
@@ -458,6 +471,28 @@ namespace Chess
 				
 				break;
 			}
+
+			case IDM_GAME_USE_NEURAL:
+			{
+				m_useNeuralEval = !m_useNeuralEval;
+				CheckMenuItem(m_hMenu, IDM_GAME_USE_NEURAL,
+							  m_useNeuralEval ? MF_CHECKED : MF_UNCHECKED);
+
+				if (m_game.GetCurrentAIPlayer())
+				{
+					m_game.GetCurrentAIPlayer()->GetEvaluator().SetMode(
+						m_useNeuralEval ? Chess::Neural::EvalMode::Auto
+										: Chess::Neural::EvalMode::Classical);
+				}
+
+				GameSettingsDialog::Settings settings;
+				GameSettingsDialog::LoadFromINI(settings);
+				settings.useNeuralEval = m_useNeuralEval;
+				GameSettingsDialog::SaveToINI(settings);
+
+				break;
+			}
+
 			// Game settings dialog
 			case IDM_GAME_SETTINGS:
 			{

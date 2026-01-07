@@ -34,6 +34,7 @@ namespace Chess
             DifficultyLevel aiDifficulty = 3;               // AI strength (1-10)
             bool autoPromoteQueen = true;                   // Skip promotion dialog
             int numThreads = 4;                             // AI search thread count
+            bool useNeuralEval = false;                     // Use neural network evaluation
 
             // ---------- Appearance Settings ----------
             std::wstring language = L"English";                      // UI language

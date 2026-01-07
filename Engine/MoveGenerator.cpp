@@ -572,8 +572,14 @@ namespace Chess
 		const int queenSideIndex = (color == PlayerColor::White) ? 1 : 3;
 
 		int row = (color == PlayerColor::White) ? 0 : 7;
+		int kingStartSquare = CoordinateToIndex(4, row);      // e1 or e8
 		int kingsideRookSquare = CoordinateToIndex(7, row);   // h1 or h8
 		int queensideRookSquare = CoordinateToIndex(0, row);  // a1 or a8
+
+		// Verify king is on its starting square before generating castling moves
+		// This prevents generating castling moves if the king has moved and returned to center
+		if (square != kingStartSquare)
+			return;
 
 		// Kingside castling (O-O)
 		// King moves from e1/e8 to g1/g8, rook from h1/h8 to f1/f8

@@ -144,6 +144,12 @@ namespace Chess
             return m_castlingRights[static_cast<int>(color) * 2 + 1];
         }
 
+        // Get castling rights array (for move generation)
+        [[nodiscard]] constexpr const std::array<bool, 4>& GetCastlingRights() const noexcept
+        {
+            return m_castlingRights;
+        }
+
         // Get move counters
         [[nodiscard]] constexpr int GetHalfMoveClock() const noexcept
         {

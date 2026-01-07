@@ -92,6 +92,7 @@ namespace Chess
         // Current game configuration for menu checkmarks
         GameMode m_currentGameMode = GameMode::HumanVsComputer;
         DifficultyLevel m_currentDifficulty = 3;
+        bool m_useNeuralEval = false;
         
         // ========== SELECTION & ANIMATION ==========
         int m_selectedSquare = -1;                      // Currently selected square (-1 = none)
