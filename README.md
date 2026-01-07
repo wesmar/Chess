@@ -22,42 +22,118 @@ This is a case study in building a high-performance chess system using **Data-Or
 - **With CRT version**: ~ 500 KB
 - **Zero external dependencies** - no Qt, SDL, or .NET
 - **Portable**: Even runs in Windows Recovery Environment (WinRE)!
-- **High Performance**: ~2.5M nodes/second per core
 
 ### 🧠 Advanced Search Algorithms
-The engine employs sophisticated search reduction techniques to maximize depth:
-- **Minimax with Alpha-Beta Pruning** - efficient move tree search
-- **Principal Variation Search (PVS)** - optimizes alpha-beta pruning by assuming the first move is best
-- **Iterative Deepening** - finds best move within time limit
-- **Null Move Pruning (NMP)** - aggressively prunes branches where the opponent cannot improve their position even if allowed two moves in a row (huge ELO gain)
-- **Late Move Reduction (LMR)** - reduces search depth for quiet moves late in the move list, allowing deeper search in critical lines
-- **Zobrist Hashing** - lightning-fast position comparison using incremental XOR-sum
-- **Transposition Table** - avoids re-analyzing same positions with striped locking
-- **Quiescence Search** - eliminates horizon effect
-- **Move Ordering (MVV-LVA)** - prioritizes captures for faster pruning
-- **Killer Move Heuristic** - remembers good non-capture moves
-- **History Heuristic** - side-specific move scoring
-- **Root-Parallel Search** - multi-threaded search with dynamic load balancing
-- **Opening Book** - hardcoded main line positions
 
-### ⚡ High-Performance Move Generation
-- **Hybrid Representation**: 64-byte Mailbox (Cache-Aligned) for board state + Bitboards for occupancy queries
-- **Bitwise Sliding Generators**: Uses advanced bit-twiddling (e.g., Hyperbola Quintessence concepts) to generate rook/bishop moves without large lookup tables (~800KB saved compared to Magic Bitboards)
-- **Branchless Logic**: Heavy use of bitwise operations to minimize branch misprediction penalties
+The engine employs a comprehensive suite of search techniques:
+
+#### Core Search Framework
+- **Minimax with Alpha-Beta Pruning** - efficient move tree search
+- **Principal Variation Search (PVS)** - optimizes alpha-beta by assuming first move is best
+- **Iterative Deepening** - finds best move within time limit
+- **Aspiration Windows** - narrows search window based on previous iteration score for faster cutoffs
+- **Quiescence Search** - eliminates horizon effect by searching tactical sequences
+
+#### Pruning Techniques
+- **Null Move Pruning (NMP)** - skips branches where opponent can't improve even with two consecutive moves; disabled in endgames to avoid zugzwang errors
+- **Late Move Reduction (LMR)** - reduces depth for quiet moves late in move list, with re-search on alpha improvement
+- **Late Move Pruning (LMP)** - completely skips late quiet moves at shallow depths
+- **Futility Pruning** - skips nodes unlikely to raise alpha based on static evaluation margin
+- **Razoring** - reduces depth when position evaluation far exceeds beta
+- **Delta Pruning** - in quiescence search, skips captures that can't possibly raise alpha
+- **Mate Distance Pruning** - stops searching for longer mates when shorter one already found
+
+#### Search Extensions
+- **Check Extensions** - extends search depth when side to move is in check
+
+#### Position Caching
+- **Zobrist Hashing** - lightning-fast incremental position comparison using XOR-sum
+- **Transposition Table** - avoids re-analyzing positions with striped locking for thread safety
+- **Threefold Repetition Detection** - recognizes draw by repetition during search
+
+#### Move Ordering Heuristics
+- **MVV-LVA (Most Valuable Victim - Least Valuable Attacker)** - prioritizes high-value captures
+- **SEE (Static Exchange Evaluation)** - evaluates capture sequences to order winning captures first
+- **Killer Move Heuristic** - remembers quiet moves that caused beta cutoffs at each ply
+- **History Heuristic** - side-specific scoring for quiet moves that historically performed well
+- **Center Control Bonus** - tactical bonus for moves targeting central squares
+
+#### Parallel Search
+- **Root-Parallel Search** - multi-threaded search with dynamic load balancing and shared alpha
+- **Thread-Local Heuristics** - separate killer move tables per thread to prevent data races
+
+#### Opening Book
+- **Hardcoded Opening Lines** - Zobrist-indexed book with random move selection for variety
+
+### ⚡ High-Performance Memory Architecture
+
+#### Stack-Allocated Move Generation
+- **MoveList Structure** - fixed 256-move array on stack, eliminating millions of heap allocations per search
+- **Zero malloc() in hot path** - entire move generation and search uses stack memory only
+
+#### Efficient Piece Tracking
+- **PieceList per Color** - O(1) piece iteration without scanning 64 squares
+- **Swap-with-last Removal** - O(1) piece list updates during make/unmake
+
+#### Incremental Updates
+- **Incremental Zobrist Key** - XOR updates instead of full recomputation
+- **Incremental Score Maintenance** - material + PST score updated on each move
+- **Bitboard Occupancy Tracking** - hybrid architecture for fast sliding piece queries
+
+#### Hybrid Board Representation
+- **64-byte Mailbox (Cache-Aligned)** - entire board state in single L1 cache line
+- **Bitboards for Occupancy** - fast sliding piece move generation without expensive lookups
+- **~800KB savings** compared to Magic Bitboards approach
 
 ### 📊 Hand-Crafted Evaluation (HCE)
-A tuned evaluation function focusing on:
-- **Material & Position**: Piece-Square Tables (PST) interpolated between opening and endgame phases
-- **Pawn Structure**: Penalties for isolated, doubled, and backward pawns
-- **King Safety**: Analysis of pawn shield integrity and open files near the king
-- **Mobility**: Bonuses for piece activity and center control
-- **Passed Pawns**: Special evaluation with king distance and rook placement considerations
-- **Tapered Evaluation**: Smooth blending of middlegame/endgame scores based on game phase
 
-### 🗝️ Architecture & Design Choices
+A tuned evaluation function with tapered scoring:
+
+#### Material & Positional
+- **Piece-Square Tables (PST)** - separate middlegame and endgame tables
+- **Tapered Evaluation** - smooth interpolation based on game phase (256 = opening, 0 = endgame)
+- **Bishop Pair Bonus** - +40 centipawns for having both bishops
+
+#### King Safety (Middlegame)
+- **Castling Position Bonus** - rewards castled king placement
+- **Pawn Shield Analysis** - evaluates pawns protecting the king
+- **Open File Penalty** - penalizes missing pawns near king
+
+#### Piece Activity
+- **Mobility Evaluation** - counts accessible squares for sliding pieces using bitboard occupancy
+- **Center Control Bonus** - rewards knights and bishops on central squares
+- **Exposed Queen Penalty** - penalizes queen on attacked square
+
+#### Pawn Structure
+- **Isolated Pawn Penalty** - pawns with no friendly pawns on adjacent files
+- **Doubled Pawn Penalty** - multiple pawns on same file
+- **Backward Pawn Penalty** - pawns that cannot safely advance
+
+#### Passed Pawns
+- **Advancement Bonus** - exponentially increasing value as pawn advances
+- **King Distance Factor** - bonus when friendly king is close, penalty when enemy king is close
+- **Rook Behind Passed Pawn** - bonus for rook supporting from behind
+
+#### Tempo
+- **Side to Move Bonus** - small advantage for having the move (+10 centipawns)
+
+### 🤖 NNUE Infrastructure (Prepared)
+
+The engine includes complete NNUE (Efficiently Updatable Neural Network) infrastructure:
+
+- **HybridEvaluator** - seamless switching between Classical/NNUE/Auto modes
+- **NeuralEvaluator** - inference engine with incremental accumulator updates
+- **FeatureExtractor** - HalfKP-style feature extraction (king-piece relationships)
+- **WeightLoader** - binary weight file parser (.nnue format)
+- **DenseLayer** - optimized matrix operations with SIMD support
+- **Transformer Architecture** - attention-based feature processing
+
+Currently runs in Classical mode. NNUE activation requires trained weight file (`nn-small.nnue`).
+
+### 🏗️ Architecture & Design Choices
 
 #### Memory Architecture: Cache-Locality First
-I deliberately chose a **64-byte "Mailbox" array representation** over bitboards, aligned to L1 cache lines. This decision minimizes cache misses during iterative game tree traversal - the most critical performance bottleneck in chess engines.
+I deliberately chose a **64-byte "Mailbox" array representation** over pure bitboards, aligned to L1 cache lines. This decision minimizes cache misses during iterative game tree traversal - the most critical performance bottleneck in chess engines.
 
 #### Data-Oriented Design
 - **1-byte piece structures** (uint8_t) with bitmask encoding
@@ -139,6 +215,14 @@ Chess/
 │   ├── Piece.h               # Piece representation (8-bit packed)
 │   ├── TranspositionTable.cpp/h # Hash table for position caching
 │   └── Zobrist.cpp/h         # Zobrist hashing for positions
+├── Engine/Neural/             # NNUE evaluation system
+│   ├── HybridEvaluator.h     # Classical/NNUE mode switching
+│   ├── NeuralEvaluator.h     # NNUE inference engine
+│   ├── FeatureExtractor.h    # HalfKP feature extraction
+│   ├── FeatureAccumulator.h  # Incremental accumulator updates
+│   ├── DenseLayer.h          # Matrix operations
+│   ├── WeightLoader.h        # .nnue file parser
+│   └── Transformer.h         # Attention architecture
 ├── UI/                        # User interface
 │   ├── Dialogs/
 │   │   ├── GameSettingsDialog.cpp/h  # Tabbed settings dialog
@@ -231,7 +315,6 @@ DarkSquare=70,80,100
 
 ### Performance Characteristics
 
-- **Search Speed**: ~2.5 million nodes/second per core (CPU-dependent)
 - **Memory Usage**: 16-64 MB for transposition table (configurable)
 - **Startup Time**: Near-instant (<100ms)
 - **Binary Size**: 150-500 KB depending on configuration
@@ -256,16 +339,38 @@ DarkSquare=70,80,100
 - Easier to understand and modify for learning
 - Fast evaluation critical for search performance
 
+**Why Stack-Allocated MoveList?**
+- Eliminates millions of malloc/free calls per second during search
+- Fixed 256-move array covers all legal chess positions (max ~218 moves)
+- Predictable memory access patterns for CPU prefetcher
+
 ## 🚀 Roadmap
 
+### Completed ✅
 - [x] Null Move Pruning (NMP) implementation
-- [x] Late Move Reduction (LMR) implementation
+- [x] Late Move Reduction (LMR) with re-search
+- [x] Late Move Pruning (LMP)
+- [x] Futility Pruning
+- [x] Razoring
+- [x] Aspiration Windows
+- [x] Delta Pruning in Quiescence
+- [x] Mate Distance Pruning
+- [x] Check Extensions
+- [x] SEE (Static Exchange Evaluation)
 - [x] Cache-aligned memory structures
+- [x] Stack-allocated MoveList
 - [x] Root-parallel search with dynamic load balancing
-- [ ] LMR fine-tuning with depth-based reduction
-- [ ] Enhanced King Safety evaluation
-- [ ] Aspiration windows for search optimization
-- [ ] Futility pruning and razoring improvements
+- [x] NNUE infrastructure (HybridEvaluator, NeuralEvaluator, etc.)
+
+### In Progress 🔄
+- [ ] NNUE weight training and integration
+- [ ] Enhanced King Safety evaluation (tropism, attack units)
+- [ ] Singular Extensions
+
+### Future 📋
+- [ ] Syzygy tablebase support
+- [ ] MultiPV analysis mode
+- [ ] Time management improvements
 
 ## Challenge
 
@@ -287,6 +392,9 @@ A: The code uses Windows 10+ APIs, but could be adapted for older systems with m
 
 **Q: Why not use a UCI protocol?**  
 A: The project includes both! There's a UCI console engine (`ChessEngineUCI.exe`) that works with Arena and other GUIs, plus the main standalone WinAPI application. The standalone version is the focus since it's more educational and shows the complete implementation, but advanced users can compile the UCI version to use the engine with their favorite chess GUI.
+
+**Q: What about NNUE?**  
+A: The complete NNUE infrastructure is implemented and ready. The engine currently runs in Classical evaluation mode. To enable NNUE, place a trained `nn-small.nnue` weight file in the application directory.
 
 ## Contributing
 
