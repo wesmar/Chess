@@ -117,7 +117,7 @@ namespace Chess
             return 10000000;
         }
 
-        // High priority: Captures using MVV-LVA (Most Valuable Victim - Least Valuable Aggressor)
+        // High priority: Captures using MVV-LVA and SEE
         if (move.IsCapture())
         {
             Piece victim = move.GetCaptured();
@@ -128,15 +128,15 @@ namespace Chess
 
             int score = 1000000 + victimValue * 10 - aggressorValue;
 
-            if (aggressorValue > 400 && victimValue < 200)
+            // SEE-based adjustment
+            int seeValue = SEE(board, move);
+            if (seeValue < 0)
             {
-                PlayerColor opponentColor = (aggressor.GetColor() == PlayerColor::White)
-                                            ? PlayerColor::Black : PlayerColor::White;
-
-                if (MoveGenerator::IsSquareAttacked(board.GetPieces(), move.GetTo(), opponentColor))
-                {
-                    score -= 50000;
-                }
+                score -= 100000;
+            }
+            else
+            {
+                score += seeValue;
             }
 
             return score;
@@ -302,72 +302,42 @@ namespace Chess
         {
             if (ShouldStop()) break;
 
-            // Step 1: Search PV move in main thread first
             OrderMoves(legalMoves, searchBoard, bestMoveSoFar, 0);
 
-            searchBoard.MakeMoveUnchecked(legalMoves[0]);
+            int alpha = -INFINITY_SCORE;
+            int beta = INFINITY_SCORE;
 
-            int pvScore;
-
-            // Aspiration windows: use narrow window for depth >= 4 based on previous score
-            // This significantly improves alpha-beta cutoffs in iterative deepening
+            // Aspiration windows for depth >= 4
             if (depth >= 4 && bestScore > -MATE_SCORE + 1000 && bestScore < MATE_SCORE - 1000)
             {
-                const int ASPIRATION_WINDOW = 50; // Centipawns
-                int alpha = bestScore - ASPIRATION_WINDOW;
-                int beta = bestScore + ASPIRATION_WINDOW;
-
-                pvScore = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
-
-                // Fail-low: score dropped below window, re-search with lower bound
-                if (pvScore <= alpha && !ShouldStop())
-                {
-                    pvScore = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, -alpha, 1);
-                }
-                // Fail-high: score exceeded window, re-search with upper bound
-                else if (pvScore >= beta && !ShouldStop())
-                {
-                    pvScore = -AlphaBeta(searchBoard, depth - 1, -beta, INFINITY_SCORE, 1);
-                }
-            }
-            else
-            {
-                // Use full window for shallow depths or mate scores
-                pvScore = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, INFINITY_SCORE, 1);
+                const int ASPIRATION_WINDOW = 50;
+                alpha = bestScore - ASPIRATION_WINDOW;
+                beta = bestScore + ASPIRATION_WINDOW;
             }
 
-            searchBoard.UndoMove();
+            Move iterBestMove = legalMoves[0];
+            int iterBestScore = -INFINITY_SCORE;
 
-            if (ShouldStop()) break;
-
-            bestMoveSoFar = legalMoves[0];
-            bestScore = pvScore;
-
-			// Step 2: Root-parallel search for remaining moves with dynamic load balancing
+            // Root-parallel search with proper PVS
             if (m_numThreads > 1 && legalMoves.size() > 1 && depth >= 4)
             {
-                int actualThreads = std::min(m_numThreads, static_cast<int>(legalMoves.size() - 1));
+                int actualThreads = std::min(m_numThreads, static_cast<int>(legalMoves.size()));
                 std::vector<std::future<std::pair<Move, int>>> futures;
 
-                // Stable copy for all worker threads to prevent data races
                 const Board rootBoard = searchBoard;
-                const int currentAlpha = bestScore;
                 const size_t totalMoves = legalMoves.size();
-
-                // Shared atomic counter for dynamic work distribution
-                auto nextMoveIndex = std::make_shared<std::atomic<size_t>>(1);
+                auto nextMoveIndex = std::make_shared<std::atomic<size_t>>(0);
+                auto sharedAlpha = std::make_shared<std::atomic<int>>(alpha);
 
                 for (int t = 0; t < actualThreads; ++t)
                 {
                     futures.push_back(std::async(std::launch::async,
                         [=, &legalMoves]() mutable -> std::pair<Move, int> {
-                            // Thread-local heuristics to avoid data races
                             ThreadLocalData tld;
                             Board localBoard = rootBoard;
                             Move localBest;
                             int localScore = -INFINITY_SCORE;
 
-                            // Each thread grabs next available move dynamically
                             while (true)
                             {
                                 size_t i = nextMoveIndex->fetch_add(1);
@@ -376,13 +346,20 @@ namespace Chess
 
                                 localBoard.MakeMoveUnchecked(legalMoves[i]);
 
-                                // PV-search: null-window first, re-search if it beats alpha
-                                int score = -WorkerAlphaBeta(localBoard, depth - 1,
-                                                             -currentAlpha - 1, -currentAlpha, 1, tld);
-                                if (score > currentAlpha && !m_abortSearch.load(std::memory_order_acquire))
+                                int score;
+                                int currentAlpha = sharedAlpha->load(std::memory_order_acquire);
+
+                                if (i == 0)
                                 {
-                                    score = -WorkerAlphaBeta(localBoard, depth - 1,
-                                                             -INFINITY_SCORE, -currentAlpha, 1, tld);
+                                    score = -WorkerAlphaBeta(localBoard, depth - 1, -beta, -currentAlpha, 1, tld);
+                                }
+                                else
+                                {
+                                    score = -WorkerAlphaBeta(localBoard, depth - 1, -currentAlpha - 1, -currentAlpha, 1, tld);
+                                    if (score > currentAlpha && score < beta && !m_abortSearch.load(std::memory_order_acquire))
+                                    {
+                                        score = -WorkerAlphaBeta(localBoard, depth - 1, -beta, -currentAlpha, 1, tld);
+                                    }
                                 }
 
                                 localBoard.UndoMove();
@@ -391,6 +368,9 @@ namespace Chess
                                 {
                                     localScore = score;
                                     localBest = legalMoves[i];
+
+                                    int prevAlpha = sharedAlpha->load();
+                                    while (score > prevAlpha && !sharedAlpha->compare_exchange_weak(prevAlpha, score));
                                 }
                             }
                             return std::make_pair(localBest, localScore);
@@ -398,43 +378,70 @@ namespace Chess
                     ));
                 }
 
-				// Collect results from worker threads
                 for (auto& f : futures)
                 {
                     auto [move, score] = f.get();
                     if (m_abortSearch.load(std::memory_order_acquire)) continue;
-                    if (score > bestScore)
+                    if (score > iterBestScore)
                     {
-                        bestScore = score;
-                        bestMoveSoFar = move;
+                        iterBestScore = score;
+                        iterBestMove = move;
                     }
                 }
             }
             else
             {
-                // Single-threaded fallback for remaining moves
-                for (size_t i = 1; i < legalMoves.size(); ++i)
+                // Single-threaded root search with proper PVS
+                for (size_t i = 0; i < legalMoves.size(); ++i)
                 {
                     if (ShouldStop()) break;
 
                     searchBoard.MakeMoveUnchecked(legalMoves[i]);
 
-                    // PV-search with null window
-                    int score = -AlphaBeta(searchBoard, depth - 1, -bestScore - 1, -bestScore, 1);
-                    if (score > bestScore && !ShouldStop())
+                    int score;
+                    if (i == 0)
                     {
-                        score = -AlphaBeta(searchBoard, depth - 1, -INFINITY_SCORE, -bestScore, 1);
+                        score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+                    }
+                    else
+                    {
+                        score = -AlphaBeta(searchBoard, depth - 1, -alpha - 1, -alpha, 1);
+                        if (score > alpha && score < beta && !ShouldStop())
+                        {
+                            score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+                        }
                     }
 
                     searchBoard.UndoMove();
 
-                    if (score > bestScore)
+                    if (score > iterBestScore)
                     {
-                        bestScore = score;
-                        bestMoveSoFar = legalMoves[i];
+                        iterBestScore = score;
+                        iterBestMove = legalMoves[i];
+                    }
+
+                    if (score > alpha)
+                    {
+                        alpha = score;
                     }
                 }
             }
+
+            if (ShouldStop()) break;
+
+            // Handle aspiration window failures
+            if (iterBestScore <= alpha - 50 || iterBestScore >= beta)
+            {
+                alpha = -INFINITY_SCORE;
+                beta = INFINITY_SCORE;
+
+                searchBoard.MakeMoveUnchecked(iterBestMove);
+                iterBestScore = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+                searchBoard.UndoMove();
+            }
+
+            bestMoveSoFar = iterBestMove;
+            bestScore = iterBestScore;
         }
 
         // Wait for all threads to complete before returning
@@ -592,17 +599,16 @@ namespace Chess
                            !move.IsEnPassant() &&
                            !move.IsCastling();
 
-            // Late Move Pruning (LMP) - skip late quiet moves entirely
-            // More aggressive than LMR: we don't search these moves at all
-            // Formula: allow 4 + depth*depth moves before pruning starts
-            // Only safe when: shallow depth, not in check, move is quiet
-            if (depth <= 6 &&
-                moveIndex >= (4 + depth * depth) &&
+            // Late Move Pruning - skip late quiet moves at moderate depths
+            // Only apply when not at root and depth is high enough
+            if (ply > 0 &&
+                depth >= 4 && depth <= 6 &&
+                moveIndex >= (6 + depth * depth) &&
                 !sideInCheck &&
                 isQuiet)
             {
                 moveIndex++;
-                continue; // Skip this move completely
+                continue;
             }
 
             m_evaluator.OnMakeMove();
@@ -610,19 +616,23 @@ namespace Chess
 
             int score;
 
-			// Late Move Reduction - reduce search depth for likely poor moves
-			// Only apply to quiet moves late in move ordering when not in check
-			bool applyLMR = depth >= 4 &&           // Deeper positions only (was 3)
-							moveIndex >= 6 &&        // More moves must be tried first (was 4)
-							!sideInCheck &&         // Don't reduce in tactical positions
-							isQuiet;                // Only for quiet moves
+            // Check if move gives check to opponent
+            const PlayerColor opponentColorAfterMove = (sideToMove == PlayerColor::White)
+                ? PlayerColor::Black : PlayerColor::White;
+            bool givesCheck = board.IsInCheck(opponentColorAfterMove);
+
+            // Late Move Reduction - reduce search depth for likely poor moves
+            // Don't reduce moves that give check or other forcing moves
+            bool applyLMR = depth >= 4 &&
+                            moveIndex >= 6 &&
+                            !sideInCheck &&
+                            !givesCheck &&
+                            isQuiet;
 
             if (applyLMR)
             {
-                // Search with reduced depth
                 score = -AlphaBeta(board, depth - 2, -beta, -alpha, ply + 1);
 
-                // If reduced search beat alpha, re-search at full depth
                 if (score > alpha)
                 {
                     score = -AlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
@@ -630,7 +640,6 @@ namespace Chess
             }
             else
             {
-                // Normal full depth search
                 score = -AlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
             }
 
@@ -807,6 +816,15 @@ namespace Chess
 
         for (const auto& move : tacticalMoves)
         {
+            // SEE pruning: skip losing captures unless promotion
+            if (move.IsCapture() && !move.IsPromotion())
+            {
+                if (SEE(board, move) < 0)
+                {
+                    continue;
+                }
+            }
+
             m_evaluator.OnMakeMove();
             board.MakeMoveUnchecked(move);
 
@@ -946,24 +964,28 @@ namespace Chess
             bool isQuiet = !move.IsCapture() && !move.IsPromotion() &&
                            !move.IsEnPassant() && !move.IsCastling();
 
-            // Late Move Pruning (LMP) - skip late quiet moves entirely
-            // More aggressive than LMR: we don't search these moves at all
-            // Formula: allow 4 + depth*depth moves before pruning starts
-            // Only safe when: shallow depth, not in check, move is quiet
-            if (depth <= 6 &&
-                moveIndex >= (4 + depth * depth) &&
+            // Late Move Pruning - skip late quiet moves at moderate depths
+            // Only apply when not at root and depth is high enough
+            if (ply > 0 &&
+                depth >= 4 && depth <= 6 &&
+                moveIndex >= (6 + depth * depth) &&
                 !sideInCheck &&
                 isQuiet)
             {
                 moveIndex++;
-                continue; // Skip this move completely
+                continue;
             }
 
             board.MakeMoveUnchecked(move);
 
             int score;
 
-            bool applyLMR = depth >= 3 && moveIndex >= 4 && !sideInCheck && isQuiet;
+            // Check if move gives check to opponent
+            const PlayerColor opponentColorAfterMove = (sideToMove == PlayerColor::White)
+                ? PlayerColor::Black : PlayerColor::White;
+            bool givesCheck = board.IsInCheck(opponentColorAfterMove);
+
+            bool applyLMR = depth >= 4 && moveIndex >= 6 && !sideInCheck && !givesCheck && isQuiet;
 
             if (applyLMR)
             {
@@ -1127,6 +1149,15 @@ namespace Chess
 
         for (const auto& move : legalTacticalMoves)
         {
+            // SEE pruning: skip losing captures unless promotion
+            if (move.IsCapture() && !move.IsPromotion())
+            {
+                if (SEE(board, move) < 0)
+                {
+                    continue;
+                }
+            }
+
             board.MakeMoveUnchecked(move);
             int score = -WorkerQuiescence(board, -beta, -alpha, ply + 1, qDepth + 1, tld);
             board.UndoMove();
@@ -1175,15 +1206,15 @@ namespace Chess
 
             int score = 1000000 + victimValue * 10 - aggressorValue;
 
-            if (aggressorValue > 400 && victimValue < 200)
+            // SEE-based adjustment
+            int seeValue = SEE(board, move);
+            if (seeValue < 0)
             {
-                PlayerColor opponentColor = (aggressor.GetColor() == PlayerColor::White)
-                                            ? PlayerColor::Black : PlayerColor::White;
-
-                if (MoveGenerator::IsSquareAttacked(board.GetPieces(), move.GetTo(), opponentColor))
-                {
-                    score -= 50000;
-                }
+                score -= 100000;
+            }
+            else
+            {
+                score += seeValue;
             }
 
             return score;
@@ -1234,7 +1265,7 @@ namespace Chess
             {
                 score = 10000000;
             }
-            // High priority: Captures using MVV-LVA
+            // High priority: Captures using MVV-LVA and SEE
             else if (move.IsCapture())
             {
                 Piece victim = move.GetCaptured();
@@ -1243,15 +1274,15 @@ namespace Chess
                 int aggressorValue = PIECE_VALUES[static_cast<int>(aggressor.GetType())];
                 score = 1000000 + victimValue * 10 - aggressorValue;
 
-                if (aggressorValue > 400 && victimValue < 200)
+                // SEE-based adjustment
+                int seeValue = SEE(board, move);
+                if (seeValue < 0)
                 {
-                    PlayerColor opponentColor = (aggressor.GetColor() == PlayerColor::White)
-                                                ? PlayerColor::Black : PlayerColor::White;
-
-                    if (MoveGenerator::IsSquareAttacked(board.GetPieces(), move.GetTo(), opponentColor))
-                    {
-                        score -= 50000;
-                    }
+                    score -= 100000;
+                }
+                else
+                {
+                    score += seeValue;
                 }
             }
             // Good priority: Promotions
@@ -1382,26 +1413,31 @@ namespace Chess
                            !move.IsEnPassant() &&
                            !move.IsCastling();
 
-            // Late Move Pruning (LMP) - skip late quiet moves entirely
-            // More aggressive than LMR: we don't search these moves at all
-            // Formula: allow 4 + depth*depth moves before pruning starts
-            // Only safe when: shallow depth, not in check, move is quiet
-            if (depth <= 6 &&
-                moveIndex >= (4 + depth * depth) &&
+            // Late Move Pruning - skip late quiet moves at moderate depths
+            // Only apply when not at root and depth is high enough
+            if (ply > 0 &&
+                depth >= 4 && depth <= 6 &&
+                moveIndex >= (6 + depth * depth) &&
                 !sideInCheck &&
                 isQuiet)
             {
                 moveIndex++;
-                continue; // Skip this move completely
+                continue;
             }
 
             board.MakeMoveUnchecked(move);
 
             int score;
 
-            bool applyLMR = depth >= 3 &&
-                            moveIndex >= 4 &&
+            // Check if move gives check to opponent
+            const PlayerColor opponentColorAfterMove = (sideToMove == PlayerColor::White)
+                ? PlayerColor::Black : PlayerColor::White;
+            bool givesCheck = board.IsInCheck(opponentColorAfterMove);
+
+            bool applyLMR = depth >= 4 &&
+                            moveIndex >= 6 &&
                             !sideInCheck &&
+                            !givesCheck &&
                             isQuiet;
 
             if (applyLMR)
@@ -1570,6 +1606,15 @@ namespace Chess
 
         for (const auto& move : tacticalMoves)
         {
+            // SEE pruning: skip losing captures unless promotion
+            if (move.IsCapture() && !move.IsPromotion())
+            {
+                if (SEE(board, move) < 0)
+                {
+                    continue;
+                }
+            }
+
             board.MakeMoveUnchecked(move);
 
             int score = -HelperQuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
@@ -1587,6 +1632,272 @@ namespace Chess
         }
 
         return alpha;
+    }
+
+    // Static Exchange Evaluation - evaluate capture sequence on target square
+    int AIPlayer::SEE(const Board& board, const Move& move) const
+    {
+        if (!move.IsCapture() && !move.IsPromotion())
+            return 0;
+
+        const auto& pieces = board.GetPieces();
+        int targetSquare = move.GetTo();
+        int fromSquare = move.GetFrom();
+
+        PlayerColor attacker = pieces[fromSquare].GetColor();
+        PlayerColor defender = (attacker == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+
+        std::array<int, 32> gain;
+        int depth = 0;
+
+        // Initial capture value
+        if (move.IsEnPassant())
+        {
+            int capturedPawnSquare = targetSquare + (attacker == PlayerColor::White ? -8 : 8);
+            gain[depth] = PIECE_VALUES[static_cast<int>(PieceType::Pawn)];
+        }
+        else if (move.IsCapture())
+        {
+            gain[depth] = PIECE_VALUES[static_cast<int>(move.GetCaptured().GetType())];
+        }
+        else
+        {
+            gain[depth] = 0;
+        }
+
+        // Add promotion bonus
+        if (move.IsPromotion())
+        {
+            gain[depth] += PIECE_VALUES[static_cast<int>(move.GetPromotion())]
+                         - PIECE_VALUES[static_cast<int>(PieceType::Pawn)];
+        }
+
+        // Create a working copy of the board for exchange sequence
+        std::array<Piece, SQUARE_COUNT> workingBoard = pieces;
+
+        // Apply initial move
+        Piece movingPiece = workingBoard[fromSquare];
+        workingBoard[fromSquare] = EMPTY_PIECE;
+
+        if (move.IsPromotion())
+        {
+            movingPiece = Piece(move.GetPromotion(), attacker);
+        }
+
+        if (move.IsEnPassant())
+        {
+            int capturedPawnSquare = targetSquare + (attacker == PlayerColor::White ? -8 : 8);
+            workingBoard[capturedPawnSquare] = EMPTY_PIECE;
+        }
+
+        workingBoard[targetSquare] = movingPiece;
+
+        int lastCapturedValue = PIECE_VALUES[static_cast<int>(movingPiece.GetType())];
+        PlayerColor sideToMove = defender;
+
+        // Simulate exchange sequence
+        while (true)
+        {
+            depth++;
+
+            // Find smallest attacker for current side
+            auto attackers = GetSmallestAttacker(workingBoard, targetSquare, sideToMove);
+            if (attackers.empty())
+                break;
+
+            int attackerSquare = attackers[0];
+            Piece attackingPiece = workingBoard[attackerSquare];
+
+            gain[depth] = lastCapturedValue - gain[depth - 1];
+            lastCapturedValue = PIECE_VALUES[static_cast<int>(attackingPiece.GetType())];
+
+            // Apply the capture
+            workingBoard[attackerSquare] = EMPTY_PIECE;
+            workingBoard[targetSquare] = attackingPiece;
+
+            sideToMove = (sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+
+            // Prune losing captures
+            if (std::max(-gain[depth - 1], gain[depth]) < 0)
+                break;
+
+            if (depth >= 31)
+                break;
+        }
+
+        // Negamax the gains
+        while (--depth > 0)
+        {
+            gain[depth - 1] = -std::max(-gain[depth - 1], gain[depth]);
+        }
+
+        return gain[0];
+    }
+
+    // Find smallest attacker of given square by specified color
+    std::vector<int> AIPlayer::GetSmallestAttacker(const std::array<Piece, SQUARE_COUNT>& pieces,
+                                                    int square, PlayerColor attackerColor) const
+    {
+        std::vector<int> attackers;
+
+        int file = square % 8;
+        int rank = square / 8;
+
+        // Check for pawn attackers
+        if (attackerColor == PlayerColor::White)
+        {
+            if (rank > 0)
+            {
+                if (file > 0)
+                {
+                    int sq = square - 9;
+                    Piece p = pieces[sq];
+                    if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::White)
+                    {
+                        attackers.push_back(sq);
+                        return attackers;
+                    }
+                }
+                if (file < 7)
+                {
+                    int sq = square - 7;
+                    Piece p = pieces[sq];
+                    if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::White)
+                    {
+                        attackers.push_back(sq);
+                        return attackers;
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (rank < 7)
+            {
+                if (file > 0)
+                {
+                    int sq = square + 7;
+                    Piece p = pieces[sq];
+                    if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::Black)
+                    {
+                        attackers.push_back(sq);
+                        return attackers;
+                    }
+                }
+                if (file < 7)
+                {
+                    int sq = square + 9;
+                    Piece p = pieces[sq];
+                    if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::Black)
+                    {
+                        attackers.push_back(sq);
+                        return attackers;
+                    }
+                }
+            }
+        }
+
+        // Check for knight attackers
+        static constexpr std::array<std::pair<int, int>, 8> KNIGHT_OFFSETS = {{
+            {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
+            {-2, -1}, {-1, -2}, {1, -2}, {2, -1}
+        }};
+
+        for (const auto& [df, dr] : KNIGHT_OFFSETS)
+        {
+            int newFile = file + df;
+            int newRank = rank + dr;
+            if (newFile >= 0 && newFile < 8 && newRank >= 0 && newRank < 8)
+            {
+                int sq = newRank * 8 + newFile;
+                Piece p = pieces[sq];
+                if (p.IsType(PieceType::Knight) && p.GetColor() == attackerColor)
+                {
+                    attackers.push_back(sq);
+                    return attackers;
+                }
+            }
+        }
+
+        // Check for bishop/queen on diagonals
+        static constexpr std::array<std::pair<int, int>, 4> DIAGONALS = {{
+            {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+        }};
+
+        for (const auto& [df, dr] : DIAGONALS)
+        {
+            int f = file + df;
+            int r = rank + dr;
+            while (f >= 0 && f < 8 && r >= 0 && r < 8)
+            {
+                int sq = r * 8 + f;
+                Piece p = pieces[sq];
+                if (p)
+                {
+                    if (p.GetColor() == attackerColor &&
+                        (p.IsType(PieceType::Bishop) || p.IsType(PieceType::Queen)))
+                    {
+                        attackers.push_back(sq);
+                        return attackers;
+                    }
+                    break;
+                }
+                f += df;
+                r += dr;
+            }
+        }
+
+        // Check for rook/queen on orthogonals
+        static constexpr std::array<std::pair<int, int>, 4> ORTHOGONALS = {{
+            {1, 0}, {0, 1}, {-1, 0}, {0, -1}
+        }};
+
+        for (const auto& [df, dr] : ORTHOGONALS)
+        {
+            int f = file + df;
+            int r = rank + dr;
+            while (f >= 0 && f < 8 && r >= 0 && r < 8)
+            {
+                int sq = r * 8 + f;
+                Piece p = pieces[sq];
+                if (p)
+                {
+                    if (p.GetColor() == attackerColor &&
+                        (p.IsType(PieceType::Rook) || p.IsType(PieceType::Queen)))
+                    {
+                        attackers.push_back(sq);
+                        return attackers;
+                    }
+                    break;
+                }
+                f += df;
+                r += dr;
+            }
+        }
+
+        // Check for king
+        static constexpr std::array<std::pair<int, int>, 8> KING_OFFSETS = {{
+            {1, 0}, {1, 1}, {0, 1}, {-1, 1},
+            {-1, 0}, {-1, -1}, {0, -1}, {1, -1}
+        }};
+
+        for (const auto& [df, dr] : KING_OFFSETS)
+        {
+            int newFile = file + df;
+            int newRank = rank + dr;
+            if (newFile >= 0 && newFile < 8 && newRank >= 0 && newRank < 8)
+            {
+                int sq = newRank * 8 + newFile;
+                Piece p = pieces[sq];
+                if (p.IsType(PieceType::King) && p.GetColor() == attackerColor)
+                {
+                    attackers.push_back(sq);
+                    return attackers;
+                }
+            }
+        }
+
+        return attackers;
     }
 
     void AIPlayer::HelperSearch(Board board, int maxDepth) {

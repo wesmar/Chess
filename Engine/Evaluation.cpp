@@ -151,9 +151,9 @@ namespace Chess
     {
         int sq = square;
 
-        // Mirror the square for White pieces (PST defined from White's view)
-        // This means white pawn on e4 gets same bonus as black pawn on e5
-        if (color == PlayerColor::White)
+        // Mirror the square for Black pieces (PST defined from White's view)
+        // This means white pawn on e2 uses rank 1, black pawn on e7 uses rank 1 (mirrored)
+        if (color == PlayerColor::Black)
         {
             int file = square % 8;
             int rank = square / 8;
@@ -781,7 +781,7 @@ namespace Chess
                 if (type == PieceType::King)
                 {
                     int sq_adjusted = sq;
-                    if (color == PlayerColor::White)
+                    if (color == PlayerColor::Black)
                     {
                         int file = sq % 8;
                         int rank = sq / 8;

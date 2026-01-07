@@ -144,6 +144,11 @@ namespace Chess
         int HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
         int HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
         void OrderMovesSimple(MoveList& moves, const Board& board, Move ttMove);
+
+        // Static Exchange Evaluation - evaluate capture sequences
+        int SEE(const Board& board, const Move& move) const;
+        std::vector<int> GetSmallestAttacker(const std::array<Piece, SQUARE_COUNT>& pieces,
+                                             int square, PlayerColor attackerColor) const;
     };
 
     // ========== PGN GAME RECORD ==========
