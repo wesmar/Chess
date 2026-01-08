@@ -3,6 +3,7 @@
 // Allows configuration of board display, game mode, AI difficulty, appearance, and player names
 #include "GameSettingsDialog.h"
 #include "../../Resources/Resource.h"
+#include "../LangManager.h"
 #include <commctrl.h>
 #include <fstream>
 #include <sstream>
@@ -74,15 +75,17 @@ namespace Chess
             {
                 // Update animation speed label as slider moves
                 int speed = static_cast<int>(SendMessage(hSlider, TBM_GETPOS, 0, 0));
-                std::wstring label = L"Speed: " + std::to_wstring(speed) + L" ms";
-                SetDlgItemText(hwnd, IDC_ANIM_SPEED_LABEL, label.c_str());
+                wchar_t label[64];
+                swprintf_s(label, Lang::Get("BOARD_SPEED_MS", L"Speed: %d ms").c_str(), speed);
+                SetDlgItemText(hwnd, IDC_ANIM_SPEED_LABEL, label);
             }
             else if (hSlider == GetDlgItem(hwnd, IDC_DIFFICULTY_SLIDER))
             {
                 // Update difficulty level label as slider moves
                 int diff = static_cast<int>(SendMessage(hSlider, TBM_GETPOS, 0, 0));
-                std::wstring label = L"Level: " + std::to_wstring(diff);
-                SetDlgItemText(hwnd, IDC_DIFFICULTY_LABEL, label.c_str());
+                wchar_t label[64];
+                swprintf_s(label, Lang::Get("GAME_LEVEL", L"Level: %d").c_str(), diff);
+                SetDlgItemText(hwnd, IDC_DIFFICULTY_LABEL, label);
             }
             return TRUE;
         }
@@ -140,20 +143,25 @@ namespace Chess
         
         // Initialize tab control with four main categories
         HWND hTab = GetDlgItem(hwnd, IDC_TAB_CONTROL);
-        
+
+        std::wstring tabBoard = Lang::Get("TAB_BOARD", L"Board");
+        std::wstring tabGame = Lang::Get("TAB_GAME", L"Game");
+        std::wstring tabAppearance = Lang::Get("TAB_APPEARANCE", L"Appearance");
+        std::wstring tabPlayers = Lang::Get("TAB_PLAYERS", L"Players");
+
         TCITEM tie = {};
         tie.mask = TCIF_TEXT;
-        
-        tie.pszText = const_cast<LPWSTR>(L"Board");
+
+        tie.pszText = const_cast<LPWSTR>(tabBoard.c_str());
         TabCtrl_InsertItem(hTab, 0, &tie);
-        
-        tie.pszText = const_cast<LPWSTR>(L"Game");
+
+        tie.pszText = const_cast<LPWSTR>(tabGame.c_str());
         TabCtrl_InsertItem(hTab, 1, &tie);
-        
-        tie.pszText = const_cast<LPWSTR>(L"Appearance");
+
+        tie.pszText = const_cast<LPWSTR>(tabAppearance.c_str());
         TabCtrl_InsertItem(hTab, 2, &tie);
-        
-        tie.pszText = const_cast<LPWSTR>(L"Players");
+
+        tie.pszText = const_cast<LPWSTR>(tabPlayers.c_str());
         TabCtrl_InsertItem(hTab, 3, &tie);
         
         // Calculate client area for tab content (excluding tab headers)
@@ -163,28 +171,28 @@ namespace Chess
         
         // ========== BOARD TAB CONTROLS ==========
         // Display options affecting board rendering and visualization
-        
-        CreateWindowEx(0, L"BUTTON", L"Flip board (Black on bottom)",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("BOARD_FLIP", L"Flip board (Black on bottom)").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 20, 300, 20,
             hwnd, (HMENU)IDC_FLIP_BOARD_CHECK, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"BUTTON", L"Show coordinates",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("BOARD_SHOW_COORDS", L"Show coordinates").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 50, 300, 20,
             hwnd, (HMENU)IDC_SHOW_COORDS_CHECK, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"BUTTON", L"Show legal moves",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("BOARD_SHOW_LEGAL", L"Show legal moves").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 80, 300, 20,
             hwnd, (HMENU)IDC_SHOW_LEGAL_CHECK, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"BUTTON", L"Animate moves",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("BOARD_ANIMATE", L"Animate moves").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 110, 300, 20,
             hwnd, (HMENU)IDC_ANIMATE_CHECK, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"STATIC", L"Animation speed:",
+
+        CreateWindowEx(0, L"STATIC", Lang::Get("BOARD_ANIM_SPEED", L"Animation speed:").c_str(),
             WS_CHILD,
             rcTab.left + 20, rcTab.top + 140, 120, 20,
             hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
@@ -196,32 +204,33 @@ namespace Chess
             hwnd, (HMENU)IDC_ANIM_SPEED_SLIDER, GetModuleHandle(nullptr), nullptr);
         SendMessage(hSlider, TBM_SETRANGE, TRUE, MAKELONG(100, 500));
         SendMessage(hSlider, TBM_SETPOS, TRUE, settings->animationSpeed);
-        
-        std::wstring speedLabel = L"Speed: " + std::to_wstring(settings->animationSpeed) + L" ms";
-        CreateWindowEx(0, L"STATIC", speedLabel.c_str(),
+
+        wchar_t speedLabel[64];
+        swprintf_s(speedLabel, Lang::Get("BOARD_SPEED_MS", L"Speed: %d ms").c_str(), settings->animationSpeed);
+        CreateWindowEx(0, L"STATIC", speedLabel,
             WS_CHILD,
             rcTab.left + 280, rcTab.top + 165, 100, 20,
             hwnd, (HMENU)IDC_ANIM_SPEED_LABEL, GetModuleHandle(nullptr), nullptr);
 
         // ========== GAME TAB CONTROLS ==========
         // Game mode selection and AI configuration
-        
-        CreateWindowEx(0, L"BUTTON", L"Human vs Human",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("GAME_MODE_HVH", L"Human vs Human").c_str(),
             WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
             rcTab.left + 20, rcTab.top + 20, 200, 20,
             hwnd, (HMENU)IDC_MODE_RADIO_HVH, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"BUTTON", L"Human vs Computer",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("GAME_MODE_HVC", L"Human vs Computer").c_str(),
             WS_CHILD | BS_AUTORADIOBUTTON,
             rcTab.left + 20, rcTab.top + 50, 200, 20,
             hwnd, (HMENU)IDC_MODE_RADIO_HVC, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"BUTTON", L"Computer vs Computer",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("GAME_MODE_CVC", L"Computer vs Computer").c_str(),
             WS_CHILD | BS_AUTORADIOBUTTON,
             rcTab.left + 20, rcTab.top + 80, 200, 20,
             hwnd, (HMENU)IDC_MODE_RADIO_CVC, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"STATIC", L"AI Difficulty:",
+
+        CreateWindowEx(0, L"STATIC", Lang::Get("GAME_AI_DIFFICULTY", L"AI Difficulty:").c_str(),
             WS_CHILD,
             rcTab.left + 20, rcTab.top + 120, 120, 20,
             hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
@@ -233,67 +242,68 @@ namespace Chess
             hwnd, (HMENU)IDC_DIFFICULTY_SLIDER, GetModuleHandle(nullptr), nullptr);
         SendMessage(hDiffSlider, TBM_SETRANGE, TRUE, MAKELONG(1, 10));
         SendMessage(hDiffSlider, TBM_SETPOS, TRUE, settings->aiDifficulty);
-        
-        std::wstring diffLabel = L"Level: " + std::to_wstring(settings->aiDifficulty);
-        CreateWindowEx(0, L"STATIC", diffLabel.c_str(),
+
+        wchar_t diffLabel[64];
+        swprintf_s(diffLabel, Lang::Get("GAME_LEVEL", L"Level: %d").c_str(), settings->aiDifficulty);
+        CreateWindowEx(0, L"STATIC", diffLabel,
             WS_CHILD,
             rcTab.left + 280, rcTab.top + 145, 100, 20,
             hwnd, (HMENU)IDC_DIFFICULTY_LABEL, GetModuleHandle(nullptr), nullptr);
         
-        CreateWindowEx(0, L"BUTTON", L"Auto-promote to Queen",
+        CreateWindowEx(0, L"BUTTON", Lang::Get("GAME_AUTO_QUEEN", L"Auto-promote to Queen").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 190, 250, 20,
             hwnd, (HMENU)IDC_AUTO_QUEEN_CHECK, GetModuleHandle(nullptr), nullptr);
         
         // ========== APPEARANCE TAB CONTROLS ==========
         // Visual customization options
-        
-        CreateWindowEx(0, L"STATIC", L"Language:",
+
+        CreateWindowEx(0, L"STATIC", Lang::Get("APPEARANCE_LANGUAGE", L"Language:").c_str(),
             WS_CHILD,
             rcTab.left + 20, rcTab.top + 20, 100, 20,
             hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
-        
+
         // Language selection dropdown
         HWND hCombo = CreateWindowEx(0, L"COMBOBOX", L"",
             WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
             rcTab.left + 130, rcTab.top + 18, 150, 200,
             hwnd, (HMENU)IDC_LANGUAGE_COMBO, GetModuleHandle(nullptr), nullptr);
-        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)L"English");
-        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Polski");
-        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Deutsch");
-        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Français");
-        
+        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)Lang::Get("LANG_ENGLISH", L"English").c_str());
+        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)Lang::Get("LANG_POLISH", L"Polski").c_str());
+        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)Lang::Get("LANG_GERMAN", L"Deutsch").c_str());
+        SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)Lang::Get("LANG_FRENCH", L"Français").c_str());
+
         // Set current language selection
         int langIndex = 0;
         if (settings->language == L"Polski") langIndex = 1;
         else if (settings->language == L"Deutsch") langIndex = 2;
         else if (settings->language == L"Français") langIndex = 3;
         SendMessage(hCombo, CB_SETCURSEL, langIndex, 0);
-        
-        CreateWindowEx(0, L"BUTTON", L"Show piece shadows",
+
+        CreateWindowEx(0, L"BUTTON", Lang::Get("APPEARANCE_SHADOWS", L"Show piece shadows").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 60, 250, 20,
             hwnd, (HMENU)IDC_PIECE_SHADOW_CHECK, GetModuleHandle(nullptr), nullptr);
         
         // ========== PLAYERS TAB CONTROLS ==========
         // Player name customization
-        
-        CreateWindowEx(0, L"STATIC", L"White player name:",
+
+        CreateWindowEx(0, L"STATIC", Lang::Get("PLAYERS_WHITE_NAME", L"White player name:").c_str(),
             WS_CHILD,
             rcTab.left + 20, rcTab.top + 20, 150, 20,
             hwnd, (HMENU)IDC_WHITE_NAME_LABEL, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"Player 1",
+
+        CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", Lang::Get("PLAYERS_DEFAULT_WHITE", L"Player 1").c_str(),
             WS_CHILD | ES_LEFT | ES_AUTOHSCROLL,
             rcTab.left + 20, rcTab.top + 45, 300, 25,
             hwnd, (HMENU)IDC_WHITE_NAME_EDIT, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(0, L"STATIC", L"Black player name:",
+
+        CreateWindowEx(0, L"STATIC", Lang::Get("PLAYERS_BLACK_NAME", L"Black player name:").c_str(),
             WS_CHILD,
             rcTab.left + 20, rcTab.top + 90, 150, 20,
             hwnd, (HMENU)IDC_BLACK_NAME_LABEL, GetModuleHandle(nullptr), nullptr);
-        
-        CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", L"Player 2",
+
+        CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT", Lang::Get("PLAYERS_DEFAULT_BLACK", L"Player 2").c_str(),
             WS_CHILD | ES_LEFT | ES_AUTOHSCROLL,
             rcTab.left + 20, rcTab.top + 115, 300, 25,
             hwnd, (HMENU)IDC_BLACK_NAME_EDIT, GetModuleHandle(nullptr), nullptr);

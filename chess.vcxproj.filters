@@ -31,6 +31,7 @@
     <ClInclude Include="UI\Dialogs\PromotionDialog.h"><Filter>UI\Dialogs</Filter></ClInclude>
     <ClInclude Include="UI\Dialogs\GameSettingsDialog.h"><Filter>UI\Dialogs</Filter></ClInclude>
     <ClInclude Include="UI\WinUtility.h"><Filter>UI</Filter></ClInclude>
+	<ClInclude Include="UI\LangManager.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Engine\Board.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\ChessConstants.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\Evaluation.h"><Filter>Engine</Filter></ClInclude>

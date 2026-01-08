@@ -126,6 +126,7 @@ namespace Chess
         bool RegisterWindowClass();                     // Register WNDCLASSEX
         bool CreateMainWindow(int nCmdShow);            // Create and show window
         void CreateMenu();                              // Create menu bar
+        void LocalizeMenu();                            // Apply localized strings to menu
         void CreateStatusBar();                         // Create status bar at bottom
         void UpdateStatusBar();                         // Update status bar text
         

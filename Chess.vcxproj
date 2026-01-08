@@ -89,6 +89,7 @@
     <ClInclude Include="UI\ChessGame.h" />
     <ClInclude Include="UI\VectorRenderer.h" />
     <ClInclude Include="UI\WinApp.h" />
+	<ClInclude Include="UI\LangManager.h" />
     <ClInclude Include="UI\Dialogs\PromotionDialog.h" />
     <ClInclude Include="UI\Dialogs\GameSettingsDialog.h" />
     <ClInclude Include="UI\WinUtility.h" />

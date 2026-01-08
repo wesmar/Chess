@@ -1,4 +1,4 @@
-﻿// WinApp.cpp
+// WinApp.cpp
 // Main Windows application window and event handling
 // Implements game window with board rendering, sidebar UI, move input,
 // animation system, AI integration, menu handling, and file operations
@@ -7,6 +7,7 @@
 #include "Dialogs/PromotionDialog.h"
 #include "Dialogs/GameSettingsDialog.h"
 #include "WinUtility.h"
+#include "LangManager.h"
 #include "../Resources/Resource.h"
 #include <windows.h>
 #include <windowsx.h>
@@ -36,6 +37,9 @@ namespace Chess
 		// Load settings from INI file at startup
 		GameSettingsDialog::Settings settings;
 		GameSettingsDialog::LoadFromINI(settings);
+
+		// Load localization based on saved language preference
+		Lang::LoadFromName(settings.language);
 
 		// Apply loaded UI preferences
 		m_uiSettings.showLegalMoves = settings.showLegalMoves;
@@ -190,24 +194,27 @@ namespace Chess
 		{
 			SetMenu(m_hwnd, hMenu);
 			m_hMenu = hMenu;
-			
+
+			// Localize menu items
+			LocalizeMenu();
+
 			// Synchronize menu checkmarks with loaded settings
-			
+
 			// Game Mode checkmarks
-			CheckMenuItem(m_hMenu, IDM_MODE_HUMAN_VS_HUMAN, 
+			CheckMenuItem(m_hMenu, IDM_MODE_HUMAN_VS_HUMAN,
 				m_currentGameMode == GameMode::HumanVsHuman ? MF_CHECKED : MF_UNCHECKED);
-			CheckMenuItem(m_hMenu, IDM_MODE_HUMAN_VS_COMPUTER, 
+			CheckMenuItem(m_hMenu, IDM_MODE_HUMAN_VS_COMPUTER,
 				m_currentGameMode == GameMode::HumanVsComputer ? MF_CHECKED : MF_UNCHECKED);
-			CheckMenuItem(m_hMenu, IDM_MODE_COMPUTER_VS_COMPUTER, 
+			CheckMenuItem(m_hMenu, IDM_MODE_COMPUTER_VS_COMPUTER,
 				m_currentGameMode == GameMode::ComputerVsComputer ? MF_CHECKED : MF_UNCHECKED);
-			
+
 			// Difficulty level checkmarks (clear all, then check current)
 			for (int i = 1; i <= 10; ++i)
 			{
 				CheckMenuItem(m_hMenu, IDM_DIFFICULTY_LEVEL_1 + i - 1, MF_UNCHECKED);
 			}
 			CheckMenuItem(m_hMenu, IDM_DIFFICULTY_LEVEL_1 + m_currentDifficulty - 1, MF_CHECKED);
-			
+
 			// View options checkmarks
 			CheckMenuItem(m_hMenu, IDM_VIEW_FLIPBOARD,
 				m_uiSettings.flipBoard ? MF_CHECKED : MF_UNCHECKED);
@@ -220,6 +227,125 @@ namespace Chess
 			CheckMenuItem(m_hMenu, IDM_GAME_USE_NEURAL,
 				m_useNeuralEval ? MF_CHECKED : MF_UNCHECKED);
 		}
+	}
+
+	void MainWindow::LocalizeMenu()
+	{
+		if (!m_hMenu) return;
+
+		// Localize top-level menus
+		MENUITEMINFOW mii = {};
+		mii.cbSize = sizeof(MENUITEMINFOW);
+		mii.fMask = MIIM_STRING;
+
+		std::wstring menuFile = Lang::Get("MENU_FILE", L"&File");
+		std::wstring menuGame = Lang::Get("MENU_GAME", L"&Game");
+		std::wstring menuView = Lang::Get("MENU_VIEW", L"&View");
+		std::wstring menuHelp = Lang::Get("MENU_HELP", L"&Help");
+
+		mii.dwTypeData = const_cast<LPWSTR>(menuFile.c_str());
+		SetMenuItemInfoW(m_hMenu, 0, TRUE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(menuGame.c_str());
+		SetMenuItemInfoW(m_hMenu, 1, TRUE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(menuView.c_str());
+		SetMenuItemInfoW(m_hMenu, 2, TRUE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(menuHelp.c_str());
+		SetMenuItemInfoW(m_hMenu, 3, TRUE, &mii);
+
+		// File menu items
+		HMENU hFileMenu = GetSubMenu(m_hMenu, 0);
+		std::wstring itemNew = Lang::Get("MENU_NEW", L"&New Game") + L"\tCtrl+N";
+		std::wstring itemOpen = Lang::Get("MENU_OPEN", L"&Open...") + L"\tCtrl+O";
+		std::wstring itemSave = Lang::Get("MENU_SAVE", L"&Save...") + L"\tCtrl+S";
+		std::wstring itemExit = Lang::Get("MENU_EXIT", L"E&xit") + L"\tAlt+F4";
+
+		mii.dwTypeData = const_cast<LPWSTR>(itemNew.c_str());
+		SetMenuItemInfoW(hFileMenu, IDM_FILE_NEW, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemOpen.c_str());
+		SetMenuItemInfoW(hFileMenu, IDM_FILE_OPEN, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemSave.c_str());
+		SetMenuItemInfoW(hFileMenu, IDM_FILE_SAVE, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemExit.c_str());
+		SetMenuItemInfoW(hFileMenu, IDM_FILE_EXIT, FALSE, &mii);
+
+		// Game menu items
+		HMENU hGameMenu = GetSubMenu(m_hMenu, 1);
+		std::wstring itemUndo = Lang::Get("MENU_UNDO", L"&Undo") + L"\tCtrl+Z";
+		std::wstring itemRedo = Lang::Get("MENU_REDO", L"&Redo") + L"\tCtrl+Y";
+		std::wstring itemSettings = Lang::Get("MENU_SETTINGS", L"&Settings...");
+		std::wstring itemNeural = Lang::Get("MENU_NEURAL", L"Use &Neural Evaluation");
+
+		mii.dwTypeData = const_cast<LPWSTR>(itemUndo.c_str());
+		SetMenuItemInfoW(hGameMenu, IDM_GAME_UNDO, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemRedo.c_str());
+		SetMenuItemInfoW(hGameMenu, IDM_GAME_REDO, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemNeural.c_str());
+		SetMenuItemInfoW(hGameMenu, IDM_GAME_USE_NEURAL, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemSettings.c_str());
+		SetMenuItemInfoW(hGameMenu, IDM_GAME_SETTINGS, FALSE, &mii);
+
+		// Mode submenu title (position 3: after Undo, Redo, Separator)
+		std::wstring menuMode = Lang::Get("MENU_MODE", L"&Mode");
+		mii.dwTypeData = const_cast<LPWSTR>(menuMode.c_str());
+		SetMenuItemInfoW(hGameMenu, 3, TRUE, &mii);
+
+		// Difficulty submenu title (position 4)
+		std::wstring menuDiff = Lang::Get("MENU_DIFFICULTY", L"&Difficulty");
+		mii.dwTypeData = const_cast<LPWSTR>(menuDiff.c_str());
+		SetMenuItemInfoW(hGameMenu, 4, TRUE, &mii);
+
+		// Mode submenu items
+		HMENU hModeMenu = GetSubMenu(hGameMenu, 3);
+		if (hModeMenu)
+		{
+			std::wstring modeHvH = Lang::Get("GAME_MODE_HVH", L"Human vs Human");
+			std::wstring modeHvC = Lang::Get("GAME_MODE_HVC", L"Human vs Computer");
+			std::wstring modeCvC = Lang::Get("GAME_MODE_CVC", L"Computer vs Computer");
+
+			mii.dwTypeData = const_cast<LPWSTR>(modeHvH.c_str());
+			SetMenuItemInfoW(hModeMenu, IDM_MODE_HUMAN_VS_HUMAN, FALSE, &mii);
+			mii.dwTypeData = const_cast<LPWSTR>(modeHvC.c_str());
+			SetMenuItemInfoW(hModeMenu, IDM_MODE_HUMAN_VS_COMPUTER, FALSE, &mii);
+			mii.dwTypeData = const_cast<LPWSTR>(modeCvC.c_str());
+			SetMenuItemInfoW(hModeMenu, IDM_MODE_COMPUTER_VS_COMPUTER, FALSE, &mii);
+		}
+
+		// Difficulty submenu items (Level 1-10)
+		HMENU hDiffMenu = GetSubMenu(hGameMenu, 4);
+		if (hDiffMenu)
+		{
+			std::wstring levelFormat = Lang::Get("MENU_LEVEL", L"Level &%d");
+			for (int i = 1; i <= 10; ++i)
+			{
+				wchar_t levelText[64];
+				swprintf_s(levelText, levelFormat.c_str(), i);
+				std::wstring levelStr = levelText;
+				mii.dwTypeData = const_cast<LPWSTR>(levelStr.c_str());
+				SetMenuItemInfoW(hDiffMenu, IDM_DIFFICULTY_LEVEL_1 + i - 1, FALSE, &mii);
+			}
+		}
+
+		// View menu items
+		HMENU hViewMenu = GetSubMenu(m_hMenu, 2);
+		std::wstring itemFlip = Lang::Get("MENU_FLIP", L"&Flip Board") + L"\tF";
+		std::wstring itemLegal = Lang::Get("MENU_LEGAL_MOVES", L"Show &Legal Moves") + L"\tL";
+		std::wstring itemCoords = Lang::Get("MENU_COORDINATES", L"Show &Coordinates") + L"\tC";
+
+		mii.dwTypeData = const_cast<LPWSTR>(itemFlip.c_str());
+		SetMenuItemInfoW(hViewMenu, IDM_VIEW_FLIPBOARD, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemLegal.c_str());
+		SetMenuItemInfoW(hViewMenu, IDM_VIEW_SHOWLEGAL, FALSE, &mii);
+		mii.dwTypeData = const_cast<LPWSTR>(itemCoords.c_str());
+		SetMenuItemInfoW(hViewMenu, IDM_VIEW_SHOWCOORDS, FALSE, &mii);
+
+		// Help menu items
+		HMENU hHelpMenu = GetSubMenu(m_hMenu, 3);
+		std::wstring itemAbout = Lang::Get("MENU_ABOUT", L"&About...");
+
+		mii.dwTypeData = const_cast<LPWSTR>(itemAbout.c_str());
+		SetMenuItemInfoW(hHelpMenu, IDM_HELP_ABOUT, FALSE, &mii);
+
+		DrawMenuBar(m_hwnd);
 	}
 	void MainWindow::CreateStatusBar()
     {
@@ -261,15 +387,26 @@ namespace Chess
 
         // Get current game state text
         GameState state = m_game.GetGameState();
-        std::wstring gameStateText = StringToWString(GameStateToString(state));
+        std::wstring gameStateText;
+        switch (state)
+        {
+        case GameState::Playing: gameStateText = Lang::Get("STATE_PLAYING", L"Playing"); break;
+        case GameState::Check: gameStateText = Lang::Get("STATE_CHECK", L"Check"); break;
+        case GameState::Checkmate: gameStateText = Lang::Get("STATE_CHECKMATE", L"Checkmate"); break;
+        case GameState::Stalemate: gameStateText = Lang::Get("STATE_STALEMATE", L"Stalemate"); break;
+        case GameState::Draw: gameStateText = Lang::Get("STATE_DRAW", L"Draw"); break;
+        default: gameStateText = L""; break;
+        }
 
         // Display current player
-        std::wstring playerText = L"Current: ";
-        playerText += (m_game.GetCurrentPlayer() == PlayerColor::White) ? L"White" : L"Black";
+        std::wstring playerText = Lang::Get("STATUS_CURRENT", L"Current: ");
+        playerText += (m_game.GetCurrentPlayer() == PlayerColor::White)
+            ? Lang::Get("STATUS_WHITE", L"White")
+            : Lang::Get("STATUS_BLACK", L"Black");
 
         // Display move count
         auto moves = m_game.GetMoveHistory();
-        std::wstring moveText = L"Moves: " + std::to_wstring(moves.size());
+        std::wstring moveText = Lang::Get("STATUS_MOVES", L"Moves: ") + std::to_wstring(moves.size());
 
         // Update all three status bar sections
         SendMessage(hStatusBar, SB_SETTEXT, 0, (LPARAM)gameStateText.c_str());
@@ -497,7 +634,8 @@ namespace Chess
 			case IDM_GAME_SETTINGS:
 			{
 				GameSettingsDialog::Settings settings;
-				
+				GameSettingsDialog::LoadFromINI(settings);
+
 				// Load current settings into dialog
 				settings.flipBoard = m_uiSettings.flipBoard;
 				settings.showCoordinates = m_uiSettings.showCoordinates;
@@ -507,10 +645,19 @@ namespace Chess
 				settings.gameMode = m_currentGameMode;
 				settings.aiDifficulty = m_currentDifficulty;
 				settings.autoPromoteQueen = m_uiSettings.autoPromoteToQueen;
-				
+
+				std::wstring previousLanguage = settings.language;
+
 				// Show settings dialog and apply changes if user clicked OK
 				if (GameSettingsDialog::Show(m_hwnd, settings))
 				{
+					// Reload localization if language changed
+					if (settings.language != previousLanguage)
+					{
+						Lang::LoadFromName(settings.language);
+						LocalizeMenu();
+					}
+
 					// Apply UI settings
 					m_uiSettings.flipBoard = settings.flipBoard;
 					m_uiSettings.showCoordinates = settings.showCoordinates;
@@ -631,16 +778,19 @@ namespace Chess
 
 			// Help menu - About dialog
             case IDM_HELP_ABOUT:
-                MessageBox(m_hwnd,
-                    L"Modern Chess\n"
-                    L"C++20 WinAPI Application\n\n"
-                    L"Using Unicode chess pieces ♔♕♖♗♘♙\n\n"
-                    L"Author: Marek Wesołowski\n"
-                    L"WESMAR https://kvc.pl\n"
-                    L"marek@wesolowski.eu.org",
-                    L"About Modern Chess",
+            {
+                std::wstring aboutText =
+                    Lang::Get("ABOUT_LINE1", L"Modern Chess") + L"\n" +
+                    Lang::Get("ABOUT_LINE2", L"C++20 WinAPI Application") + L"\n\n" +
+                    Lang::Get("ABOUT_LINE3", L"Using Unicode chess pieces ♔♕♖♗♘♙") + L"\n\n" +
+                    Lang::Get("ABOUT_AUTHOR", L"Author: Marek Wesołowski") + L"\n" +
+                    Lang::Get("ABOUT_COMPANY", L"WESMAR https://kvc.pl") + L"\n" +
+                    Lang::Get("ABOUT_EMAIL", L"marek@wesolowski.eu.org");
+                MessageBox(m_hwnd, aboutText.c_str(),
+                    Lang::Get("ABOUT_TITLE", L"About Modern Chess").c_str(),
                     MB_OK | MB_ICONINFORMATION);
                 break;
+            }
             }
             return 0;
         }
@@ -898,68 +1048,79 @@ namespace Chess
                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                      DEFAULT_PITCH, L"Segoe UI");
         HFONT hOldFont = (HFONT)SelectObject(hdc, hTitleFont);
-        
+
         SetTextColor(hdc, RGB(220, 220, 220));
         SetBkMode(hdc, TRANSPARENT);
-        
+
         // Draw title with chess piece symbols
         RECT titleRect = rect;
         titleRect.top += 10;
-        DrawText(hdc, L"♔ Modern Chess ♚", -1, &titleRect, DT_CENTER | DT_TOP);
-        
+        DrawText(hdc, Lang::Get("SIDEBAR_TITLE", L"♔ Modern Chess ♚").c_str(), -1, &titleRect, DT_CENTER | DT_TOP);
+
         SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-        
+
         // Draw game state (check, checkmate, etc.)
         RECT stateRect = rect;
         stateRect.top += 50;
-        
+
         GameState state = m_game.GetGameState();
-        std::wstring stateText = StringToWString(GameStateToString(state));
-        
+        std::wstring stateText;
+        switch (state)
+        {
+        case GameState::Playing: stateText = Lang::Get("STATE_PLAYING", L"Playing"); break;
+        case GameState::Check: stateText = Lang::Get("STATE_CHECK", L"Check"); break;
+        case GameState::Checkmate: stateText = Lang::Get("STATE_CHECKMATE", L"Checkmate"); break;
+        case GameState::Stalemate: stateText = Lang::Get("STATE_STALEMATE", L"Stalemate"); break;
+        case GameState::Draw: stateText = Lang::Get("STATE_DRAW", L"Draw"); break;
+        default: stateText = L""; break;
+        }
+
         // Color checkmate text red for emphasis
         if (state == GameState::Checkmate)
         {
-            stateText += std::wstring(L" - ") +
-                ((m_game.GetCurrentPlayer() == PlayerColor::White) ?
-                 L"Black Wins!" : L"White Wins!");
+            stateText += (m_game.GetCurrentPlayer() == PlayerColor::White)
+                ? Lang::Get("END_BLACK_WINS_SHORT", L" - Black Wins!")
+                : Lang::Get("END_WHITE_WINS_SHORT", L" - White Wins!");
             SetTextColor(hdc, RGB(255, 100, 100));
         }
         else
         {
             SetTextColor(hdc, RGB(180, 180, 180));
         }
-        
+
         DrawText(hdc, stateText.c_str(), -1, &stateRect, DT_CENTER | DT_TOP);
-        
+
         // Draw current player indicator
         RECT playerRect = rect;
         playerRect.top += 85;
-        
-        std::wstring playerText = L"To move: ";
-        playerText += (m_game.GetCurrentPlayer() == PlayerColor::White) ? L"White ♔" : L"Black ♚";
-        
+
+        std::wstring playerText = Lang::Get("SIDEBAR_TO_MOVE", L"To move: ");
+        playerText += (m_game.GetCurrentPlayer() == PlayerColor::White)
+            ? Lang::Get("SIDEBAR_WHITE_PIECE", L"White ♔")
+            : Lang::Get("SIDEBAR_BLACK_PIECE", L"Black ♚");
+
         // Show AI indicator if applicable
         if (m_game.IsAITurn())
         {
-            playerText += L" (AI)";
+            playerText += Lang::Get("SIDEBAR_AI", L" (AI)");
         }
-        
+
         SetTextColor(hdc, RGB(200, 200, 200));
         DrawText(hdc, playerText.c_str(), -1, &playerRect, DT_CENTER | DT_TOP);
-        
+
         // Draw material evaluation
         RECT materialRect = rect;
         materialRect.top += 120;
-        
+
         int material = m_game.GetBoard().EvaluateMaterial();
-        std::wstring materialText = L"Material: ";
+        std::wstring materialText = Lang::Get("SIDEBAR_MATERIAL", L"Material: ");
         if (material > 0)
             materialText += L"+";
         materialText += std::to_wstring(material);
-        
+
         SetTextColor(hdc, RGB(150, 150, 150));
         DrawText(hdc, materialText.c_str(), -1, &materialRect, DT_CENTER | DT_TOP);
-        
+
         SelectObject(hdc, hOldFont);
         DeleteObject(hTitleFont);
     }
@@ -969,26 +1130,26 @@ namespace Chess
         // Draw separator line at top
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(60, 65, 75));
         HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-        
+
         MoveToEx(hdc, rect.left, rect.top, nullptr);
         LineTo(hdc, rect.right, rect.top);
-        
+
         SelectObject(hdc, hOldPen);
         DeleteObject(hPen);
-        
+
         // Draw section title
         HFONT hFont = CreateFont(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                 DEFAULT_PITCH, L"Segoe UI");
         HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
-        
+
         SetTextColor(hdc, RGB(200, 200, 200));
         SetBkMode(hdc, TRANSPARENT);
-        
+
         RECT titleRect = rect;
         titleRect.top += 10;
-        DrawText(hdc, L"Move History", -1, &titleRect, DT_CENTER);
+        DrawText(hdc, Lang::Get("SIDEBAR_HISTORY", L"Move History").c_str(), -1, &titleRect, DT_CENTER);
         
         // Switch to smaller font for move list
         SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
@@ -1184,33 +1345,36 @@ namespace Chess
 						// Animate AI's move if enabled
 						if (m_uiSettings.animateMoves)
 						{
-							StartAnimation(aiMove.GetFrom(), aiMove.GetTo(), 
+							StartAnimation(aiMove.GetFrom(), aiMove.GetTo(),
 										 m_game.GetBoard().GetPieceAt(aiMove.GetTo()));
 						}
-						
+
 						PostMessage(m_hwnd, WM_GAME_STATE_CHANGED, 0, 0);
 					}
 					else
 					{
 						// AI made illegal move - should never happen
-						MessageBox(m_hwnd, L"AI tried to make illegal move!", L"Error", MB_OK | MB_ICONERROR);
+						MessageBox(m_hwnd, Lang::Get("ERROR_AI_ILLEGAL", L"AI tried to make illegal move!").c_str(),
+							Lang::Get("ERROR_TITLE", L"Error").c_str(), MB_OK | MB_ICONERROR);
 					}
 				}
 				else
 				{
 					// AI has no moves available
-					MessageBox(m_hwnd, L"AI has no moves available!", L"Info", MB_OK | MB_ICONINFORMATION);
+					MessageBox(m_hwnd, Lang::Get("ERROR_AI_NO_MOVES", L"AI has no moves available!").c_str(),
+						Lang::Get("INFO_TITLE", L"Info").c_str(), MB_OK | MB_ICONINFORMATION);
 				}
 			}
 			catch (const std::exception& e)
 			{
-				std::string error = "AI move failed: ";
-				error += e.what();
-				MessageBoxA(m_hwnd, error.c_str(), "AI Error", MB_OK | MB_ICONERROR);
+				std::wstring error = Lang::Get("ERROR_AI_FAILED", L"AI move failed: ");
+				error += StringToWString(e.what());
+				MessageBox(m_hwnd, error.c_str(), Lang::Get("ERROR_TITLE", L"Error").c_str(), MB_OK | MB_ICONERROR);
 			}
 			catch (...)
 			{
-				MessageBox(m_hwnd, L"Unknown AI error occurred!", L"Error", MB_OK | MB_ICONERROR);
+				MessageBox(m_hwnd, Lang::Get("ERROR_AI_UNKNOWN", L"Unknown AI error occurred!").c_str(),
+					Lang::Get("ERROR_TITLE", L"Error").c_str(), MB_OK | MB_ICONERROR);
 			}
 		}
 		
@@ -1220,42 +1384,43 @@ namespace Chess
     void MainWindow::CheckGameEnd()
     {
         GameState state = m_game.GetGameState();
-        
+
         // Check if game has ended
         if (state == GameState::Checkmate || state == GameState::Stalemate || state == GameState::Draw)
         {
             std::wstring message;
             std::wstring title;
-            
+
             // Prepare appropriate end-game message
             switch (state)
             {
             case GameState::Checkmate:
-                title = L"Checkmate!";
-                message = (m_game.GetCurrentPlayer() == PlayerColor::White) ?
-					L"Black wins by checkmate!" : L"White wins by checkmate!";
+                title = Lang::Get("END_CHECKMATE_TITLE", L"Checkmate!");
+                message = (m_game.GetCurrentPlayer() == PlayerColor::White)
+                    ? Lang::Get("END_BLACK_WINS", L"Black wins by checkmate!")
+                    : Lang::Get("END_WHITE_WINS", L"White wins by checkmate!");
                 break;
-                
+
             case GameState::Stalemate:
-                title = L"Stalemate!";
-                message = L"The game is a draw by stalemate.";
+                title = Lang::Get("END_STALEMATE_TITLE", L"Stalemate!");
+                message = Lang::Get("END_STALEMATE_MSG", L"The game is a draw by stalemate.");
                 break;
-                
+
             case GameState::Draw:
-                title = L"Draw!";
-                message = L"The game is a draw.";
+                title = Lang::Get("END_DRAW_TITLE", L"Draw!");
+                message = Lang::Get("END_DRAW_MSG", L"The game is a draw.");
                 break;
-                
+
             default:
                 return;
             }
-            
+
             // Offer to start new game
-            message += L"\n\nDo you want to start a new game?";
-            
+            message += Lang::Get("END_NEW_GAME", L"\n\nDo you want to start a new game?");
+
             int result = MessageBox(m_hwnd, message.c_str(), title.c_str(),
                                    MB_YESNO | MB_ICONINFORMATION);
-            
+
             if (result == IDYES)
             {
                 NewGame();

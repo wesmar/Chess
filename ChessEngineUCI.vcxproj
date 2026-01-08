@@ -76,6 +76,7 @@
   <ItemGroup>
     <ClInclude Include="UCI\UCIEngine.h" />
     <ClInclude Include="UI\ChessGame.h" />
+	<ClInclude Include="UI\LangManager.h" />
     <ClInclude Include="Engine\Board.h" />
     <ClInclude Include="Engine\ChessConstants.h" />
     <ClInclude Include="Engine\Evaluation.h" />
