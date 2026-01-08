@@ -1948,34 +1948,40 @@ namespace Chess
         NewGame(GameMode::HumanVsComputer);
     }
 
-    // Start a new game with specified mode
-    void ChessGame::NewGame(GameMode mode)
-    {
-        m_gameMode = mode;
-        m_board.ResetToStartingPosition();
-        m_selectedSquare = -1;
-        m_moveHistory.clear();
-        m_boardHistory.clear();
-        m_boardHistory.push_back(m_board);
-        m_currentHistoryIndex = 0;
-        
-        // Configure player AI status based on game mode
-        if (mode == GameMode::HumanVsHuman)
-        {
-            m_players[0].isAI = false;
-            m_players[1].isAI = false;
-        }
-        else if (mode == GameMode::HumanVsComputer)
-        {
-            m_players[0].isAI = false;  // Human plays white
-            m_players[1].isAI = true;   // Computer plays black
-            
-            // Set default difficulty if not configured
-            if (m_players[1].aiDifficulty == 5)
-            {
-                m_players[1].aiDifficulty = 3;
-            }
-        }
+	// Start a new game with specified mode
+	// humanPlaysWhite parameter determines who plays white in Human vs Computer mode
+	void ChessGame::NewGame(GameMode mode, bool humanPlaysWhite)
+	{
+		m_gameMode = mode;
+		m_board.ResetToStartingPosition();
+		m_selectedSquare = -1;
+		m_moveHistory.clear();
+		m_boardHistory.clear();
+		m_boardHistory.push_back(m_board);
+		m_currentHistoryIndex = 0;
+		
+		// Configure player AI status based on game mode
+		if (mode == GameMode::HumanVsHuman)
+		{
+			m_players[0].isAI = false;
+			m_players[1].isAI = false;
+		}
+		else if (mode == GameMode::HumanVsComputer)
+		{
+			// MODIFIED LOGIC: Support human playing either color
+			// If humanPlaysWhite = true  → White=Human(false), Black=AI(true)
+			// If humanPlaysWhite = false → White=AI(true), Black=Human(false)
+			
+			m_players[0].isAI = !humanPlaysWhite;  // White (Player 0)
+			m_players[1].isAI = humanPlaysWhite;   // Black (Player 1)
+			
+			// Set default difficulty for AI player (whichever one is AI)
+			int aiIndex = m_players[0].isAI ? 0 : 1;
+			if (m_players[aiIndex].aiDifficulty == 5)
+			{
+				m_players[aiIndex].aiDifficulty = 3;
+			}
+		}
         else if (mode == GameMode::ComputerVsComputer)
         {
             m_players[0].isAI = true;

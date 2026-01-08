@@ -564,7 +564,7 @@ namespace Chess
 				break;
 			}
 
-			// View menu - Flip board
+			// View menu - Flip board and restart game
 			case IDM_VIEW_FLIPBOARD:
 				m_uiSettings.flipBoard = !m_uiSettings.flipBoard;
 				CheckMenuItem(m_hMenu, cmdId, m_uiSettings.flipBoard ? MF_CHECKED : MF_UNCHECKED);
@@ -583,6 +583,9 @@ namespace Chess
 					settings.flipBoard = m_uiSettings.flipBoard;
 					GameSettingsDialog::SaveToINI(settings);
 				}
+				
+				// ADDED: Restart game to apply color changes
+				NewGame();
 				
 				InvalidateRect(m_hwnd, nullptr, TRUE);
 				break;
@@ -776,8 +779,8 @@ namespace Chess
                 NewGame();
             }
             break;
-            
-		// F key - Flip board
+
+		// F key - Flip board and restart game to swap colors
 		case 'F':
 			m_uiSettings.flipBoard = !m_uiSettings.flipBoard;
 			
@@ -787,6 +790,10 @@ namespace Chess
 				config.flipBoard = m_uiSettings.flipBoard;
 				m_renderer.SetConfig(config);
 			}
+			
+			// ADDED: Restart game with new color assignment
+			// This ensures AI/human colors match board orientation
+			NewGame();
 			
 			InvalidateRect(m_hwnd, nullptr, TRUE);
 			break;
@@ -1388,8 +1395,13 @@ namespace Chess
 
 	void MainWindow::NewGame()
 	{
-		// Reset game state and UI
-		m_game.NewGame(m_currentGameMode);
+		// Determine who plays white based on board flip setting
+		// When board is flipped (black on bottom), human plays black
+		// When board is normal (white on bottom), human plays white
+		bool humanPlaysWhite = !m_uiSettings.flipBoard;
+		
+		// Reset game state and UI with appropriate color assignment
+		m_game.NewGame(m_currentGameMode, humanPlaysWhite);
 		m_selectedSquare = -1;
 		m_currentAnimation.inProgress = false;
 		m_aiThinking = false;

@@ -176,8 +176,10 @@ namespace Chess
         
         // ========== GAME MANAGEMENT ==========
         
-        // Start new game with specified mode
-        void NewGame(GameMode mode = GameMode::HumanVsHuman);
+		// Start new game with specified mode
+		// @param mode: Game mode (Human vs Human, Human vs Computer, etc.)
+		// @param humanPlaysWhite: true = human plays white, false = human plays black (Computer mode only)
+		void NewGame(GameMode mode = GameMode::HumanVsHuman, bool humanPlaysWhite = true);
         
         // Load position from FEN string
         void LoadGame(const std::string& fen);
