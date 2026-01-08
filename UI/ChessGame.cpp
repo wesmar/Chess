@@ -256,23 +256,237 @@ namespace Chess
 
 		const int MAX_DEPTH = 30;
 
-		// Level 1: Pure random move selection
+		// Level 1: Weak play with preference for active moves
+		// Uses 1-ply evaluation with bonuses for captures, development, and center control
+		// Large margin (600) maintains weakness while avoiding purely passive play
 		if (m_difficulty == 1)
 		{
+			const int margin = 600;
+
+			int bestMoveScore = -INFINITY_SCORE;
+			
+			// First pass: find best score with activity bonuses
+			for (int i = 0; i < legalMoves.size(); ++i)
+			{
+				const Move& move = legalMoves[i];
+				searchBoard.MakeMoveUnchecked(move);
+
+				int score = -Evaluate(searchBoard);
+				
+				searchBoard.UndoMove();
+
+				// Bonuses for "interesting" moves to avoid pure passivity
+				if (move.IsCapture())
+				{
+					score += 120;
+				}
+
+				Piece movedPiece = board.GetPieceAt(move.GetFrom());
+				int fromRank = move.GetFrom() / 8;
+				int toFile = move.GetTo() % 8;
+
+				// Encourage piece development from back rank
+				if (movedPiece.GetType() == PieceType::Knight || 
+					movedPiece.GetType() == PieceType::Bishop)
+				{
+					int backRank = (movedPiece.GetColor() == PlayerColor::White) ? 0 : 7;
+					if (fromRank == backRank)
+					{
+						score += 90;
+					}
+				}
+
+				// Encourage central pawn advances
+				if (movedPiece.GetType() == PieceType::Pawn)
+				{
+					if (toFile == 3 || toFile == 4)
+					{
+						score += 60;
+					}
+				}
+
+				// Small bonus for castling
+				if (move.IsCastling())
+				{
+					score += 80;
+				}
+
+				if (score > bestMoveScore)
+				{
+					bestMoveScore = score;
+				}
+			}
+
+			// Second pass: collect moves within margin
+			std::array<Move, 256> candidates;
+			int candidateCount = 0;
+
+			for (int i = 0; i < legalMoves.size(); ++i)
+			{
+				const Move& move = legalMoves[i];
+				searchBoard.MakeMoveUnchecked(move);
+
+				int score = -Evaluate(searchBoard);
+				
+				searchBoard.UndoMove();
+
+				// Apply same bonuses as first pass
+				if (move.IsCapture())
+				{
+					score += 120;
+				}
+
+				Piece movedPiece = board.GetPieceAt(move.GetFrom());
+				int fromRank = move.GetFrom() / 8;
+				int toFile = move.GetTo() % 8;
+
+				if (movedPiece.GetType() == PieceType::Knight || 
+					movedPiece.GetType() == PieceType::Bishop)
+				{
+					int backRank = (movedPiece.GetColor() == PlayerColor::White) ? 0 : 7;
+					if (fromRank == backRank)
+					{
+						score += 90;
+					}
+				}
+
+				if (movedPiece.GetType() == PieceType::Pawn)
+				{
+					if (toFile == 3 || toFile == 4)
+					{
+						score += 60;
+					}
+				}
+
+				if (move.IsCastling())
+				{
+					score += 80;
+				}
+
+				if (score >= bestMoveScore - margin)
+				{
+					candidates[candidateCount++] = move;
+				}
+			}
+
+			if (candidateCount <= 0)
+			{
+				return legalMoves[0];
+			}
+
 			std::random_device rd;
 			std::mt19937 gen(rd());
-			std::uniform_int_distribution<> dis(0, static_cast<int>(legalMoves.size()) - 1);
-			return legalMoves[dis(gen)];
+			std::uniform_int_distribution<> dis(0, candidateCount - 1);
+			return candidates[dis(gen)];
 		}
 
-		// Level 2: Random from top moves
+		// Level 2: Amateur-friendly play (2-ply minimax)
+		// Looks ahead to opponent's best response to avoid obvious blunders
+		// Smaller margin (250) keeps some variety without terrible moves
 		if (m_difficulty == 2)
 		{
+			const int margin = 250;
+
+			int bestMoveScore = -INFINITY_SCORE;
+
+			// First pass: compute 2-ply scores for all moves
+			// For each candidate move, opponent gets to respond optimally
+			for (int i = 0; i < legalMoves.size(); ++i)
+			{
+				const Move& move = legalMoves[i];
+				searchBoard.MakeMoveUnchecked(move);
+
+				// Generate opponent's legal responses
+				auto opponentReplies = searchBoard.GenerateLegalMoves();
+				int worstScoreForUs = -INFINITY_SCORE;
+
+				if (opponentReplies.empty())
+				{
+					// No legal moves for opponent - checkmate or stalemate
+					// Evaluate from opponent's perspective (they're on move)
+					worstScoreForUs = Evaluate(searchBoard);
+				}
+				else
+				{
+					// Find opponent's best reply (worst outcome for us)
+					for (int r = 0; r < opponentReplies.size(); ++r)
+					{
+						searchBoard.MakeMoveUnchecked(opponentReplies[r]);
+
+						// After opponent's reply, evaluate from our perspective (negated)
+						int replyScore = -Evaluate(searchBoard);
+
+						searchBoard.UndoMove();
+
+						if (replyScore > worstScoreForUs)
+						{
+							worstScoreForUs = replyScore;
+						}
+					}
+				}
+
+				// Our 2-ply score accounts for opponent's best response
+				int score = -worstScoreForUs;
+
+				searchBoard.UndoMove();
+
+				if (score > bestMoveScore)
+				{
+					bestMoveScore = score;
+				}
+			}
+
+			// Second pass: collect candidate moves within margin
+			std::array<Move, 256> candidates;
+			int candidateCount = 0;
+
+			for (int i = 0; i < legalMoves.size(); ++i)
+			{
+				const Move& move = legalMoves[i];
+				searchBoard.MakeMoveUnchecked(move);
+
+				auto opponentReplies = searchBoard.GenerateLegalMoves();
+				int worstScoreForUs = -INFINITY_SCORE;
+
+				if (opponentReplies.empty())
+				{
+					worstScoreForUs = Evaluate(searchBoard);
+				}
+				else
+				{
+					for (int r = 0; r < opponentReplies.size(); ++r)
+					{
+						searchBoard.MakeMoveUnchecked(opponentReplies[r]);
+						int replyScore = -Evaluate(searchBoard);
+						searchBoard.UndoMove();
+
+						if (replyScore > worstScoreForUs)
+						{
+							worstScoreForUs = replyScore;
+						}
+					}
+				}
+
+				int score = -worstScoreForUs;
+
+				searchBoard.UndoMove();
+
+				// Keep moves close to best score
+				if (score >= bestMoveScore - margin)
+				{
+					candidates[candidateCount++] = move;
+				}
+			}
+
+			if (candidateCount <= 0)
+			{
+				return legalMoves[0];
+			}
+
 			std::random_device rd;
 			std::mt19937 gen(rd());
-			OrderMoves(legalMoves, searchBoard, Move(), 0);
-			std::uniform_int_distribution<> dis(0, std::min(5, static_cast<int>(legalMoves.size()) - 1));
-			return legalMoves[dis(gen)];
+			std::uniform_int_distribution<> dis(0, candidateCount - 1);
+			return candidates[dis(gen)];
 		}
 
 		// Clear TT and heuristics - safe since no search is running yet
@@ -469,6 +683,27 @@ namespace Chess
 		return bestMoveSoFar;
 	}
 
+	// Filter pseudo-legal moves to legal moves by verifying king safety
+    MoveList AIPlayer::FilterLegalMoves(Board& board, const MoveList& pseudoMoves,
+                                         PlayerColor sideToMove, PlayerColor opponentColor)
+    {
+        MoveList legalMoves;
+        for (const Move& move : pseudoMoves)
+        {
+            board.MakeMoveUnchecked(move);
+            int kingSquare = board.GetKingSquare(sideToMove);
+            
+            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
+                board.GetPieces(), kingSquare, opponentColor))
+            {
+                legalMoves.push_back(move);
+            }
+            
+            board.UndoMove();
+        }
+        return legalMoves;
+    }
+
     // Alpha-beta negamax search with transposition table
     int AIPlayer::AlphaBeta(Board& board, int depth, int alpha, int beta, int ply)
     {
@@ -549,21 +784,7 @@ namespace Chess
             &pieceList
         );
 
-        // Filter for legal moves using Make/Undo approach
-        MoveList moves;
-        for (const Move& move : pseudoMoves)
-        {
-            board.MakeMoveUnchecked(move);
-            int kingSquare = board.GetKingSquare(sideToMove);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                board.GetPieces(), kingSquare, opponentColor))
-            {
-                moves.push_back(move);
-            }
-
-            board.UndoMove();
-        }
+        MoveList moves = FilterLegalMoves(board, pseudoMoves, sideToMove, opponentColor);
 
         if (moves.empty())
         {
@@ -732,21 +953,7 @@ namespace Chess
                 &pieceList
             );
 
-            // Filter for legal moves using Make/Undo approach
-            MoveList evasions;
-            for (const Move& move : pseudoEvasions)
-            {
-                board.MakeMoveUnchecked(move);
-                int kingSquare = board.GetKingSquare(sideToMove);
-
-                if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                    board.GetPieces(), kingSquare, opponentColor))
-                {
-                    evasions.push_back(move);
-                }
-
-                board.UndoMove();
-            }
+            MoveList evasions = FilterLegalMoves(board, pseudoEvasions, sideToMove, opponentColor);
 
             if (evasions.empty())
             {
@@ -811,25 +1018,11 @@ namespace Chess
             &board.GetPieceList(board.GetSideToMove())
         );
 
-        MoveList tacticalMoves;
-
         PlayerColor movedColor = board.GetSideToMove();
         PlayerColor opponentColor = (movedColor == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
         Board temp = board;
 
-        for (const auto& move : pseudoTacticalMoves)
-        {
-            temp.MakeMoveUnchecked(move);
-
-            int kingSquare = temp.GetKingSquare(movedColor);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(temp.GetPieces(), kingSquare, opponentColor))
-            {
-                tacticalMoves.push_back(move);
-            }
-
-            temp.UndoMove();
-        }
+        MoveList tacticalMoves = FilterLegalMoves(temp, pseudoTacticalMoves, movedColor, opponentColor);
 
         OrderMoves(tacticalMoves, board, Move(), ply);
 
@@ -919,21 +1112,7 @@ namespace Chess
             &pieceList
         );
 
-        // Filter for legal moves using Make/Undo approach
-        MoveList moves;
-        for (const Move& move : pseudoMoves)
-        {
-            board.MakeMoveUnchecked(move);
-            int kingSquare = board.GetKingSquare(sideToMove);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                board.GetPieces(), kingSquare, opponentColor))
-            {
-                moves.push_back(move);
-            }
-
-            board.UndoMove();
-        }
+        MoveList moves = FilterLegalMoves(board, pseudoMoves, sideToMove, opponentColor);
 
         if (moves.empty())
         {
@@ -1085,21 +1264,7 @@ namespace Chess
                 &pieceList
             );
 
-            // Filter for legal moves using Make/Undo approach
-            MoveList evasions;
-            for (const Move& move : pseudoEvasions)
-            {
-                board.MakeMoveUnchecked(move);
-                int kingSquare = board.GetKingSquare(sideToMove);
-
-                if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                    board.GetPieces(), kingSquare, opponentColor))
-                {
-                    evasions.push_back(move);
-                }
-
-                board.UndoMove();
-            }
+            MoveList evasions = FilterLegalMoves(board, pseudoEvasions, sideToMove, opponentColor);
 
             if (evasions.empty())
             {
@@ -1149,20 +1314,7 @@ namespace Chess
         const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
             ? PlayerColor::Black : PlayerColor::White;
 
-        MoveList legalTacticalMoves;
-        for (const Move& move : tacticalMoves)
-        {
-            board.MakeMoveUnchecked(move);
-            int kingSquare = board.GetKingSquare(sideToMove);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                board.GetPieces(), kingSquare, opponentColor))
-            {
-                legalTacticalMoves.push_back(move);
-            }
-
-            board.UndoMove();
-        }
+        MoveList legalTacticalMoves = FilterLegalMoves(board, tacticalMoves, sideToMove, opponentColor);
 
         OrderMovesWorker(legalTacticalMoves, board, Move(), ply, tld);
 
@@ -1321,336 +1473,6 @@ namespace Chess
         {
             moves.push_back(move);
         }
-    }
-
-    int AIPlayer::HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply)
-    {
-        if (m_abortSearch.load()) return 0;
-
-        // Draw detection by repetition
-        if (ply > 0 && board.CountRepetitions() >= 2)
-        {
-            return 0;
-        }
-
-        // Mate distance pruning - don't search for mates longer than already found
-        // If we found mate in 5 moves, no point searching for mate in 8 moves
-        // This ensures the engine always prefers the shortest mate sequence
-        int mateAlpha = -MATE_SCORE + ply;
-        int mateBeta = MATE_SCORE - ply - 1;
-        if (alpha < mateAlpha) alpha = mateAlpha;
-        if (beta > mateBeta) beta = mateBeta;
-        if (alpha >= beta) return alpha;
-
-        uint64_t zobristKey = board.GetZobristKey();
-        Move ttMove;
-        int ttScore;
-        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove, ply))
-        {
-            return ttScore;
-        }
-
-        if (depth == 0)
-        {
-            return HelperQuiescenceSearch(board, alpha, beta, ply, 0);
-        }
-
-        const PlayerColor sideToMove = board.GetCurrentPlayer();
-        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
-            ? PlayerColor::Black : PlayerColor::White;
-
-        const auto& castlingRights = board.GetCastlingRights();
-        const auto& pieceList = board.GetPieceList(sideToMove);
-
-        MoveList pseudoMoves = MoveGenerator::GeneratePseudoLegalMoves(
-            board.GetPieces(),
-            sideToMove,
-            board.GetEnPassantSquare(),
-            &castlingRights,
-            &pieceList
-        );
-
-        // Filter for legal moves using Make/Undo approach
-        MoveList moves;
-        for (const Move& move : pseudoMoves)
-        {
-            board.MakeMoveUnchecked(move);
-            int kingSquare = board.GetKingSquare(sideToMove);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                board.GetPieces(), kingSquare, opponentColor))
-            {
-                moves.push_back(move);
-            }
-
-            board.UndoMove();
-        }
-
-        if (moves.empty())
-        {
-            if (board.IsInCheck(sideToMove))
-            {
-                return -MATE_SCORE + ply;
-            }
-            return 0;
-        }
-
-		// Null move pruning - disabled in endgames to avoid zugzwang errors
-		int phase = ComputePhase(board);
-		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
-		{
-			const int R = 2;
-			board.MakeNullMoveUnchecked();
-			int score = -HelperAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
-			board.UndoNullMove();
-
-			if (score >= beta)
-			{
-				return beta;
-			}
-		}
-
-        OrderMovesSimple(moves, board, ttMove);
-
-        Move bestMove;
-        int bestScore = -INFINITY_SCORE;
-        uint8_t flag = TT_ALPHA;
-
-        bool sideInCheck = board.IsInCheck(sideToMove);
-
-        if (sideInCheck && ply < MAX_PLY - 1)
-        {
-            depth++;
-        }
-
-        int moveIndex = 0;
-
-        for (const auto& move : moves)
-        {
-            bool isQuiet = !move.IsCapture() &&
-                           !move.IsPromotion() &&
-                           !move.IsEnPassant() &&
-                           !move.IsCastling();
-
-            // Late Move Pruning - skip late quiet moves at moderate depths
-            // Only apply when not at root and depth is high enough
-            if (ply > 0 &&
-                depth >= 4 && depth <= 6 &&
-                moveIndex >= (6 + depth * depth) &&
-                !sideInCheck &&
-                isQuiet)
-            {
-                moveIndex++;
-                continue;
-            }
-
-            board.MakeMoveUnchecked(move);
-
-            int score;
-
-            // Check if move gives check to opponent
-            const PlayerColor opponentColorAfterMove = (sideToMove == PlayerColor::White)
-                ? PlayerColor::Black : PlayerColor::White;
-            bool givesCheck = board.IsInCheck(opponentColorAfterMove);
-
-            bool applyLMR = depth >= 4 &&
-                            moveIndex >= 6 &&
-                            !sideInCheck &&
-                            !givesCheck &&
-                            isQuiet;
-
-            if (applyLMR)
-            {
-                score = -HelperAlphaBeta(board, depth - 2, -beta, -alpha, ply + 1);
-
-                if (score > alpha)
-                {
-                    score = -HelperAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
-                }
-            }
-            else
-            {
-                score = -HelperAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1);
-            }
-
-            board.UndoMove();
-
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestMove = move;
-            }
-
-            if (score >= beta)
-            {
-                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
-                return beta;
-            }
-
-            if (score > alpha)
-            {
-                alpha = score;
-                flag = TT_EXACT;
-            }
-
-            moveIndex++;
-        }
-
-        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove, ply);
-        return bestScore;
-    }
-
-    int AIPlayer::HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth)
-    {
-        // Helper threads use classical evaluation for thread safety
-        if (m_abortSearch.load() || qDepth >= 8)
-        {
-            return Chess::Evaluate(board);
-        }
-
-        const PlayerColor sideToMove = board.GetCurrentPlayer();
-
-        if (board.IsInCheck(sideToMove))
-        {
-            const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
-                ? PlayerColor::Black : PlayerColor::White;
-
-            const auto& castlingRights = board.GetCastlingRights();
-            const auto& pieceList = board.GetPieceList(sideToMove);
-
-            MoveList pseudoEvasions = MoveGenerator::GeneratePseudoLegalMoves(
-                board.GetPieces(),
-                sideToMove,
-                board.GetEnPassantSquare(),
-                &castlingRights,
-                &pieceList
-            );
-
-            // Filter for legal moves using Make/Undo approach
-            MoveList evasions;
-            for (const Move& move : pseudoEvasions)
-            {
-                board.MakeMoveUnchecked(move);
-                int kingSquare = board.GetKingSquare(sideToMove);
-
-                if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                    board.GetPieces(), kingSquare, opponentColor))
-                {
-                    evasions.push_back(move);
-                }
-
-                board.UndoMove();
-            }
-
-            if (evasions.empty())
-            {
-                return -MATE_SCORE + ply;
-            }
-
-            OrderMovesSimple(evasions, board, Move());
-
-            int best = -INFINITY_SCORE;
-
-            for (const auto& move : evasions)
-            {
-                board.MakeMoveUnchecked(move);
-
-                int score = -HelperQuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
-
-                board.UndoMove();
-
-                if (score > best) best = score;
-
-                if (score >= beta)
-                {
-                    return beta;
-                }
-                if (score > alpha)
-                {
-                    alpha = score;
-                }
-            }
-
-            return alpha;
-        }
-
-        // Helper threads use classical evaluation for thread safety
-        int standPat = Chess::Evaluate(board);
-
-        if (standPat >= beta)
-        {
-            return beta;
-        }
-
-        if (standPat > alpha)
-        {
-            alpha = standPat;
-        }
-
-        // Delta pruning: if position is too bad, even best possible capture won't help
-        // Use queen value (900) + margin (200) for safety (accounts for promotions)
-        const int QUEEN_VALUE = 900;
-        const int DELTA_MARGIN = 200;
-        if (standPat + QUEEN_VALUE + DELTA_MARGIN < alpha)
-        {
-            return alpha; // Position hopeless, skip tactical search
-        }
-
-        MoveList pseudoTacticalMoves = MoveGenerator::GenerateTacticalMoves(
-            board.GetPieces(),
-            sideToMove,
-            board.GetEnPassantSquare(),
-            &board.GetPieceList(sideToMove)
-        );
-
-        const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
-            ? PlayerColor::Black : PlayerColor::White;
-
-        MoveList tacticalMoves;
-        for (const Move& move : pseudoTacticalMoves)
-        {
-            board.MakeMoveUnchecked(move);
-            int kingSquare = board.GetKingSquare(sideToMove);
-
-            if (kingSquare != -1 && !MoveGenerator::IsSquareAttacked(
-                board.GetPieces(), kingSquare, opponentColor))
-            {
-                tacticalMoves.push_back(move);
-            }
-
-            board.UndoMove();
-        }
-
-        OrderMovesSimple(tacticalMoves, board, Move());
-
-        for (const auto& move : tacticalMoves)
-        {
-            // SEE pruning: skip losing captures unless promotion
-            if (move.IsCapture() && !move.IsPromotion())
-            {
-                if (SEE(board, move) < 0)
-                {
-                    continue;
-                }
-            }
-
-            board.MakeMoveUnchecked(move);
-
-            int score = -HelperQuiescenceSearch(board, -beta, -alpha, ply + 1, qDepth + 1);
-
-            board.UndoMove();
-
-            if (score >= beta)
-            {
-                return beta;
-            }
-            if (score > alpha)
-            {
-                alpha = score;
-            }
-        }
-
-        return alpha;
     }
 
     // Static Exchange Evaluation - evaluate capture sequence on target square
@@ -1919,37 +1741,6 @@ namespace Chess
         return attackers;
     }
 
-    void AIPlayer::HelperSearch(Board board, int maxDepth) {
-        for (int depth = 1; depth <= maxDepth; ++depth) {
-            if (m_abortSearch.load()) return;
-
-            auto moves = board.GenerateLegalMoves();
-            if (moves.empty()) return;
-
-            OrderMovesSimple(moves, board, Move());
-
-            for (size_t i = 0; i < moves.size(); ++i) {
-                if (m_abortSearch.load()) return;
-
-                const Move& move = moves[i];
-                board.MakeMoveUnchecked(move);
-
-                int reduction = 0;
-                if (i >= 4 && depth >= 3 &&
-                    !move.IsCapture() &&
-                    !move.IsPromotion() &&
-                    !board.IsInCheck(board.GetCurrentPlayer())) {
-                    reduction = 1;
-                }
-
-                int score = -HelperAlphaBeta(board, depth - 1 - reduction,
-                                      -INFINITY_SCORE, INFINITY_SCORE, 1);
-
-                board.UndoMove();
-            }
-        }
-    }
-
     // ---------- ChessGame Implementation ----------
     
     // Constructor - initialize game with default settings
@@ -1988,8 +1779,8 @@ namespace Chess
 		else if (mode == GameMode::HumanVsComputer)
 		{
 			// MODIFIED LOGIC: Support human playing either color
-			// If humanPlaysWhite = true  → White=Human(false), Black=AI(true)
-			// If humanPlaysWhite = false → White=AI(true), Black=Human(false)
+			// If humanPlaysWhite = true  â†’ White=Human(false), Black=AI(true)
+			// If humanPlaysWhite = false â†’ White=AI(true), Black=Human(false)
 			
 			m_players[0].isAI = !humanPlaysWhite;  // White (Player 0)
 			m_players[1].isAI = humanPlaysWhite;   // Black (Player 1)

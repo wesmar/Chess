@@ -138,12 +138,12 @@ namespace Chess
                               int ply, const ThreadLocalData& tld);
         int ScoreMoveWorker(const Move& move, const Board& board, Move ttMove, int ply,
                             const ThreadLocalData& tld);
-
-        // Helper search functions for parallel workers
-        void HelperSearch(Board board, int depth);
-        int HelperAlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
-        int HelperQuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
+		
         void OrderMovesSimple(MoveList& moves, const Board& board, Move ttMove);
+
+		// Filter pseudo-legal moves to legal moves by verifying king safety
+        MoveList FilterLegalMoves(Board& board, const MoveList& pseudoMoves,
+                                  PlayerColor sideToMove, PlayerColor opponentColor);
 
         // Static Exchange Evaluation - evaluate capture sequences
         int SEE(const Board& board, const Move& move) const;
