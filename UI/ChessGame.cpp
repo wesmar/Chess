@@ -58,7 +58,7 @@ namespace Chess
             {
                 for (int to = 0; to < 64; ++to)
                 {
-                    m_history[side][from][to] = 0;
+                    m_history[side][from][to].store(0, std::memory_order_relaxed);
                 }
             }
         }
@@ -155,7 +155,7 @@ namespace Chess
 		// History heuristic: use shared table for the side that is making the move
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()];
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
         
         // Tactical bonus for moves to central squares
         // Central control is crucial in chess - pieces on central squares
@@ -212,32 +212,32 @@ namespace Chess
         return elapsed >= m_maxSearchTimeMs;
     }
 
-    // Main search function - find best move using iterative deepening with root-parallel search
-    Move AIPlayer::CalculateBestMove(const Board& board, int maxTimeMs)
-    {
-        m_abortSearch.store(false, std::memory_order_release);
-        m_searchStartTime = std::chrono::steady_clock::now();
-        m_maxSearchTimeMs = maxTimeMs;
+	// Main search function - find best move using iterative deepening with root-parallel search
+	Move AIPlayer::CalculateBestMove(const Board& board, int maxTimeMs)
+	{
+		m_abortSearch.store(false, std::memory_order_release);
+		m_searchStartTime = std::chrono::steady_clock::now();
+		m_maxSearchTimeMs = maxTimeMs;
 
-        // Reset NNUE accumulator state for new search
-        m_evaluator.PrepareSearch();
+		// Reset NNUE accumulator state for new search
+		m_evaluator.PrepareSearch();
 
-        // Set search time based on difficulty level
-        if (m_difficulty <= 2)
-            m_maxSearchTimeMs = 100;
-        else if (m_difficulty <= 4)
-            m_maxSearchTimeMs = 1000;
-        else if (m_difficulty <= 6)
-            m_maxSearchTimeMs = 3000;
-        else if (m_difficulty <= 8)
-            m_maxSearchTimeMs = 5000;
-        else
-            m_maxSearchTimeMs = 10000;
+		// Set search time based on difficulty level
+		if (m_difficulty <= 2)
+			m_maxSearchTimeMs = 100;
+		else if (m_difficulty <= 4)
+			m_maxSearchTimeMs = 1000;
+		else if (m_difficulty <= 6)
+			m_maxSearchTimeMs = 3000;
+		else if (m_difficulty <= 8)
+			m_maxSearchTimeMs = 5000;
+		else
+			m_maxSearchTimeMs = 10000;
 
-        Board searchBoard = board;
-        auto legalMoves = searchBoard.GenerateLegalMoves();
-        if (legalMoves.empty())
-            return Move();
+		Board searchBoard = board;
+		auto legalMoves = searchBoard.GenerateLegalMoves();
+		if (legalMoves.empty())
+			return Move();
 
 		// Try opening book first for higher difficulties
 		if (m_difficulty >= 3)
@@ -248,207 +248,226 @@ namespace Chess
 			int ply = (board.GetFullMoveNumber() - 1) * 2;
 			if (board.GetSideToMove() == PlayerColor::Black)
 				ply++;
-			
+
 			auto bookMove = ProbeBook(board, ply);
 			if (bookMove.has_value())
 				return bookMove.value();
 		}
 
-        const int MAX_DEPTH = 30;
+		const int MAX_DEPTH = 30;
 
-        // Level 1: Pure random move selection
-        if (m_difficulty == 1)
-        {
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            std::uniform_int_distribution<> dis(0, static_cast<int>(legalMoves.size()) - 1);
-            return legalMoves[dis(gen)];
-        }
+		// Level 1: Pure random move selection
+		if (m_difficulty == 1)
+		{
+			std::random_device rd;
+			std::mt19937 gen(rd());
+			std::uniform_int_distribution<> dis(0, static_cast<int>(legalMoves.size()) - 1);
+			return legalMoves[dis(gen)];
+		}
 
-        // Level 2: Random from top moves
-        if (m_difficulty == 2)
-        {
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            OrderMoves(legalMoves, searchBoard, Move(), 0);
-            std::uniform_int_distribution<> dis(0, std::min(5, static_cast<int>(legalMoves.size()) - 1));
-            return legalMoves[dis(gen)];
-        }
+		// Level 2: Random from top moves
+		if (m_difficulty == 2)
+		{
+			std::random_device rd;
+			std::mt19937 gen(rd());
+			OrderMoves(legalMoves, searchBoard, Move(), 0);
+			std::uniform_int_distribution<> dis(0, std::min(5, static_cast<int>(legalMoves.size()) - 1));
+			return legalMoves[dis(gen)];
+		}
 
-        // Clear TT and heuristics - safe since no search is running yet
-        m_transpositionTable.Clear();
+		// Clear TT and heuristics - safe since no search is running yet
+		m_transpositionTable.Clear();
 
-        for (int i = 0; i < MAX_PLY; ++i)
-        {
-            m_killerMoves[i][0] = Move();
-            m_killerMoves[i][1] = Move();
-        }
-        for (int side = 0; side < 2; ++side)
-        {
-            for (int from = 0; from < 64; ++from)
-            {
-                for (int to = 0; to < 64; ++to)
-                {
-                    m_history[side][from][to] = 0;
-                }
-            }
-        }
+		for (int i = 0; i < MAX_PLY; ++i)
+		{
+			m_killerMoves[i][0] = Move();
+			m_killerMoves[i][1] = Move();
+		}
+		for (int side = 0; side < 2; ++side)
+		{
+			for (int from = 0; from < 64; ++from)
+			{
+				for (int to = 0; to < 64; ++to)
+				{
+					m_history[side][from][to].store(0, std::memory_order_relaxed);
+				}
+			}
+		}
 
-        Move bestMoveSoFar = legalMoves[0];
-        int bestScore = -INFINITY_SCORE;
+		Move bestMoveSoFar = legalMoves[0];
+		int bestScore = -INFINITY_SCORE;
 
-        // Iterative deepening with root-parallel search and aspiration windows
-        for (int depth = 1; depth <= MAX_DEPTH; ++depth)
-        {
-            if (ShouldStop()) break;
+		// Iterative deepening with root-parallel search and aspiration windows
+		for (int depth = 1; depth <= MAX_DEPTH; ++depth)
+		{
+			if (ShouldStop()) break;
 
-            OrderMoves(legalMoves, searchBoard, bestMoveSoFar, 0);
+			OrderMoves(legalMoves, searchBoard, bestMoveSoFar, 0);
 
-            int alpha = -INFINITY_SCORE;
-            int beta = INFINITY_SCORE;
+			int alpha = -INFINITY_SCORE;
+			int beta = INFINITY_SCORE;
 
-            // Aspiration windows for depth >= 4
-            if (depth >= 4 && bestScore > -MATE_SCORE + 1000 && bestScore < MATE_SCORE - 1000)
-            {
-                const int ASPIRATION_WINDOW = 50;
-                alpha = bestScore - ASPIRATION_WINDOW;
-                beta = bestScore + ASPIRATION_WINDOW;
-            }
+			// Aspiration windows for depth >= 4
+			if (depth >= 4 && bestScore > -MATE_SCORE + 1000 && bestScore < MATE_SCORE - 1000)
+			{
+				const int ASPIRATION_WINDOW = 50;
+				alpha = bestScore - ASPIRATION_WINDOW;
+				beta = bestScore + ASPIRATION_WINDOW;
+			}
 
-            Move iterBestMove = legalMoves[0];
-            int iterBestScore = -INFINITY_SCORE;
+			Move iterBestMove = legalMoves[0];
+			int iterBestScore = -INFINITY_SCORE;
 
-            // Root-parallel search with proper PVS
-            if (m_numThreads > 1 && legalMoves.size() > 1 && depth >= 4)
-            {
-                int actualThreads = std::min(m_numThreads, static_cast<int>(legalMoves.size()));
-                std::vector<std::future<std::pair<Move, int>>> futures;
+			// Root-parallel search with PV searched first (proper root PVS)
+			if (m_numThreads > 1 && legalMoves.size() > 1 && depth >= 4)
+			{
+				// 1) Search PV move first in main thread with full window
+				searchBoard.MakeMoveUnchecked(legalMoves[0]);
+				ThreadLocalData pvTld;
+				int pvScore = -WorkerAlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1, pvTld);
+				searchBoard.UndoMove();
 
-                const Board rootBoard = searchBoard;
-                const size_t totalMoves = legalMoves.size();
-                auto nextMoveIndex = std::make_shared<std::atomic<size_t>>(0);
-                auto sharedAlpha = std::make_shared<std::atomic<int>>(alpha);
+				iterBestMove = legalMoves[0];
+				iterBestScore = pvScore;
 
-                for (int t = 0; t < actualThreads; ++t)
-                {
-                    futures.push_back(std::async(std::launch::async,
-                        [=, &legalMoves]() mutable -> std::pair<Move, int> {
-                            ThreadLocalData tld;
-                            Board localBoard = rootBoard;
-                            Move localBest;
-                            int localScore = -INFINITY_SCORE;
+				if (pvScore > alpha)
+				{
+					alpha = pvScore;
+				}
 
-                            while (true)
-                            {
-                                size_t i = nextMoveIndex->fetch_add(1);
-                                if (i >= totalMoves) break;
-                                if (m_abortSearch.load(std::memory_order_acquire)) break;
+				// 2) If PV already fails high or time is up, skip launching workers
+				if (pvScore < beta && !ShouldStop())
+				{
+					// Launch workers for remaining moves starting from index 1
+					int actualThreads = std::min(m_numThreads, static_cast<int>(legalMoves.size()) - 1);
+					std::vector<std::future<std::pair<Move, int>>> futures;
 
-                                localBoard.MakeMoveUnchecked(legalMoves[i]);
+					const Board rootBoard = searchBoard;
+					const size_t totalMoves = legalMoves.size();
+					auto nextMoveIndex = std::make_shared<std::atomic<size_t>>(1);
+					auto sharedAlpha = std::make_shared<std::atomic<int>>(alpha);
 
-                                int score;
-                                int currentAlpha = sharedAlpha->load(std::memory_order_acquire);
+					for (int t = 0; t < actualThreads; ++t)
+					{
+						futures.push_back(std::async(std::launch::async,
+							[=, &legalMoves]() mutable -> std::pair<Move, int> {
+								ThreadLocalData tld;
+								Board localBoard = rootBoard;
+								Move localBest;
+								int localScore = -INFINITY_SCORE;
 
-                                if (i == 0)
-                                {
-                                    score = -WorkerAlphaBeta(localBoard, depth - 1, -beta, -currentAlpha, 1, tld);
-                                }
-                                else
-                                {
-                                    score = -WorkerAlphaBeta(localBoard, depth - 1, -currentAlpha - 1, -currentAlpha, 1, tld);
-                                    if (score > currentAlpha && score < beta && !m_abortSearch.load(std::memory_order_acquire))
-                                    {
-                                        score = -WorkerAlphaBeta(localBoard, depth - 1, -beta, -currentAlpha, 1, tld);
-                                    }
-                                }
+								while (true)
+								{
+									size_t i = nextMoveIndex->fetch_add(1);
+									if (i >= totalMoves) break;
+									if (m_abortSearch.load(std::memory_order_acquire)) break;
 
-                                localBoard.UndoMove();
+									localBoard.MakeMoveUnchecked(legalMoves[i]);
 
-                                if (score > localScore)
-                                {
-                                    localScore = score;
-                                    localBest = legalMoves[i];
+									int currentAlpha = sharedAlpha->load(std::memory_order_acquire);
 
-                                    int prevAlpha = sharedAlpha->load();
-                                    while (score > prevAlpha && !sharedAlpha->compare_exchange_weak(prevAlpha, score));
-                                }
-                            }
-                            return std::make_pair(localBest, localScore);
-                        }
-                    ));
-                }
+									// All worker moves use PVS narrow window
+									int score = -WorkerAlphaBeta(localBoard, depth - 1,
+										-currentAlpha - 1, -currentAlpha, 1, tld);
 
-                for (auto& f : futures)
-                {
-                    auto [move, score] = f.get();
-                    if (m_abortSearch.load(std::memory_order_acquire)) continue;
-                    if (score > iterBestScore)
-                    {
-                        iterBestScore = score;
-                        iterBestMove = move;
-                    }
-                }
-            }
-            else
-            {
-                // Single-threaded root search with proper PVS
-                for (size_t i = 0; i < legalMoves.size(); ++i)
-                {
-                    if (ShouldStop()) break;
+									if (score > currentAlpha && score < beta &&
+										!m_abortSearch.load(std::memory_order_acquire))
+									{
+										score = -WorkerAlphaBeta(localBoard, depth - 1,
+											-beta, -currentAlpha, 1, tld);
+									}
 
-                    searchBoard.MakeMoveUnchecked(legalMoves[i]);
+									localBoard.UndoMove();
 
-                    int score;
-                    if (i == 0)
-                    {
-                        score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
-                    }
-                    else
-                    {
-                        score = -AlphaBeta(searchBoard, depth - 1, -alpha - 1, -alpha, 1);
-                        if (score > alpha && score < beta && !ShouldStop())
-                        {
-                            score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
-                        }
-                    }
+									if (score > localScore)
+									{
+										localScore = score;
+										localBest = legalMoves[i];
 
-                    searchBoard.UndoMove();
+										int prevAlpha = sharedAlpha->load();
+										while (score > prevAlpha &&
+											!sharedAlpha->compare_exchange_weak(prevAlpha, score))
+										{
+										}
+									}
+								}
+								return std::make_pair(localBest, localScore);
+							}
+						));
+					}
 
-                    if (score > iterBestScore)
-                    {
-                        iterBestScore = score;
-                        iterBestMove = legalMoves[i];
-                    }
+					for (auto& f : futures)
+					{
+						auto [move, score] = f.get();
+						if (m_abortSearch.load(std::memory_order_acquire)) continue;
+						if (score > iterBestScore)
+						{
+							iterBestScore = score;
+							iterBestMove = move;
+						}
+					}
+				}
+			}
+			else
+			{
+				// Single-threaded root search with proper PVS
+				for (size_t i = 0; i < legalMoves.size(); ++i)
+				{
+					if (ShouldStop()) break;
 
-                    if (score > alpha)
-                    {
-                        alpha = score;
-                    }
-                }
-            }
+					searchBoard.MakeMoveUnchecked(legalMoves[i]);
 
-            if (ShouldStop()) break;
+					int score;
+					if (i == 0)
+					{
+						score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+					}
+					else
+					{
+						score = -AlphaBeta(searchBoard, depth - 1, -alpha - 1, -alpha, 1);
+						if (score > alpha && score < beta && !ShouldStop())
+						{
+							score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+						}
+					}
 
-            // Handle aspiration window failures
-            if (iterBestScore <= alpha - 50 || iterBestScore >= beta)
-            {
-                alpha = -INFINITY_SCORE;
-                beta = INFINITY_SCORE;
+					searchBoard.UndoMove();
 
-                searchBoard.MakeMoveUnchecked(iterBestMove);
-                iterBestScore = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
-                searchBoard.UndoMove();
-            }
+					if (score > iterBestScore)
+					{
+						iterBestScore = score;
+						iterBestMove = legalMoves[i];
+					}
 
-            bestMoveSoFar = iterBestMove;
-            bestScore = iterBestScore;
-        }
+					if (score > alpha)
+					{
+						alpha = score;
+					}
+				}
+			}
 
-        // Wait for all threads to complete before returning
-        m_abortSearch.store(true, std::memory_order_release);
+			if (ShouldStop()) break;
 
-        return bestMoveSoFar;
-    }
+			// Handle aspiration window failures
+			if (iterBestScore <= alpha - 50 || iterBestScore >= beta)
+			{
+				alpha = -INFINITY_SCORE;
+				beta = INFINITY_SCORE;
+
+				searchBoard.MakeMoveUnchecked(iterBestMove);
+				iterBestScore = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
+				searchBoard.UndoMove();
+			}
+
+			bestMoveSoFar = iterBestMove;
+			bestScore = iterBestScore;
+		}
+
+		// Wait for all threads to complete before returning
+		m_abortSearch.store(true, std::memory_order_release);
+
+		return bestMoveSoFar;
+	}
 
     // Alpha-beta negamax search with transposition table
     int AIPlayer::AlphaBeta(Board& board, int depth, int alpha, int beta, int ply)
@@ -658,7 +677,7 @@ namespace Chess
                 // Update history and killer moves for quiet moves
                 if (isQuiet)
                 {
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
 
                     // Store killer move
                     if (ply < MAX_PLY)
@@ -1013,7 +1032,7 @@ namespace Chess
                 // Update heuristics on beta cutoff
                 if (isQuiet)
                 {
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()] += depth * depth;
+                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
 
                     if (ply < MAX_PLY)
                     {
@@ -1232,7 +1251,7 @@ namespace Chess
         // Read from shared history table
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
-        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()];
+        int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
 
         // Tactical bonus for central squares
         // Central control is crucial in chess - pieces on central squares
