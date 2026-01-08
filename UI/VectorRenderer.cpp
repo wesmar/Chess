@@ -84,94 +84,110 @@ namespace Chess
                                         bool isSelected, bool isHighlighted)
     {
         if (!piece) return;
-        
+
+        // Create a copy of the rect to modify position without affecting the highlight
+        RECT pieceRect = rect;
+
         // Draw background highlight if square is selected or highlighted
         if (isSelected)
         {
             DrawHighlight(hdc, rect, m_config.selectionColor, 4);
+            
+            // "Lift" the piece slightly up to simulate it being picked up
+            // This adds a nice tactile feel to the selection
+            int liftOffset = (rect.bottom - rect.top) / 10; // 10% of square size
+            pieceRect.top -= liftOffset;
+            pieceRect.bottom -= liftOffset;
+            
+            // Optional: Shift slightly left too for a subtle 3D shadow effect perspective
+            // pieceRect.left -= 2;
+            // pieceRect.right -= 2;
         }
         else if (isHighlighted)
         {
             DrawHighlight(hdc, rect, m_config.highlightColor, 3);
         }
         
-        DrawPiece(hdc, rect, piece);
+        // Pass the modified (lifted) rect to the drawing function
+        DrawPiece(hdc, pieceRect, piece);
     }
 
-    // Render complete chess board with pieces and optional highlights
-    void ChessPieceRenderer::RenderBoard(HDC hdc, const RECT& clientRect,
-                                        const std::array<Piece, SQUARE_COUNT>& board,
-                                        int selectedSquare,
-                                        const std::vector<int>& highlightSquares)
-    {
-        // Calculate board size to fit in client area (leave space for sidebar)
-        int boardSize = std::min(
-            clientRect.right - clientRect.left - 300,
-            clientRect.bottom - clientRect.top - 60
-        );
-        
-        RECT boardRect = {
-            clientRect.left + (clientRect.right - clientRect.left - 300 - boardSize) / 2,
-            clientRect.top + (clientRect.bottom - clientRect.top - boardSize) / 2 - 20,
-            clientRect.left + (clientRect.right - clientRect.left - 300 + boardSize) / 2,
-            clientRect.top + (clientRect.bottom - clientRect.top + boardSize) / 2 - 20
-        };
+	// Render complete chess board with pieces and optional highlights
+	void ChessPieceRenderer::RenderBoard(HDC hdc, const RECT& clientRect,
+										const std::array<Piece, SQUARE_COUNT>& board,
+										int selectedSquare,
+										const std::vector<int>& highlightSquares)
+	{
+		// Calculate board size to fit in client area (leave space for sidebar)
+		int boardSize = std::min(
+			clientRect.right - clientRect.left - 300,
+			clientRect.bottom - clientRect.top - 60
+		);
+		
+		RECT boardRect = {
+			clientRect.left + (clientRect.right - clientRect.left - 300 - boardSize) / 2,
+			clientRect.top + (clientRect.bottom - clientRect.top - boardSize) / 2 - 20,
+			clientRect.left + (clientRect.right - clientRect.left - 300 + boardSize) / 2,
+			clientRect.top + (clientRect.bottom - clientRect.top + boardSize) / 2 - 20
+		};
 
-        // Draw background
-        HBRUSH bgBrush = CreateSolidBrush(m_config.backgroundColor);
-        FillRect(hdc, &clientRect, bgBrush);
-        DeleteObject(bgBrush);
-        
-        // Draw board border
-        HBRUSH borderBrush = CreateSolidBrush(m_config.borderColor);
-        RECT borderRect = {
-            boardRect.left - 2,
-            boardRect.top - 2,
-            boardRect.right + 2,
-            boardRect.bottom + 2
-        };
-        FrameRect(hdc, &borderRect, borderBrush);
-        DeleteObject(borderBrush);
-        
-        // Draw all squares and pieces
-        for (int rank = 0; rank < BOARD_SIZE; ++rank)
-        {
-            for (int file = 0; file < BOARD_SIZE; ++file)
-            {
-                int squareIndex = rank * BOARD_SIZE + file;
-                RECT squareRect = GetSquareRect(boardRect, file, rank);
-                
-                // Determine square color (alternating pattern)
-                bool isDark = (file + rank) % 2 == 1;
-                DrawChessSquare(hdc, squareRect, isDark);
-                
-                // Draw highlight if square is selected
-                if (squareIndex == selectedSquare)
-                {
-                    DrawHighlight(hdc, squareRect, m_config.selectionColor, 4);
-                }
-                // Draw highlight if square is in highlight list
-                else if (std::find(highlightSquares.begin(), highlightSquares.end(),
-                                  squareIndex) != highlightSquares.end())
-                {
-                    DrawHighlight(hdc, squareRect, m_config.highlightColor, 3);
-                }
-                
-                // Draw piece if present
-                Piece piece = board[squareIndex];
-                if (piece)
-                {
-                    DrawPiece(hdc, squareRect, piece);
-                }
-            }
-        }
-        
-        // Draw file and rank labels
-        if (m_config.showCoordinates)
-        {
-            RenderCoordinates(hdc, boardRect);
-        }
-    }
+		// Draw background
+		HBRUSH bgBrush = CreateSolidBrush(m_config.backgroundColor);
+		FillRect(hdc, &clientRect, bgBrush);
+		DeleteObject(bgBrush);
+		
+		// Draw board border
+		HBRUSH borderBrush = CreateSolidBrush(m_config.borderColor);
+		RECT borderRect = {
+			boardRect.left - 2,
+			boardRect.top - 2,
+			boardRect.right + 2,
+			boardRect.bottom + 2
+		};
+		FrameRect(hdc, &borderRect, borderBrush);
+		DeleteObject(borderBrush);
+		
+		// Draw all squares and pieces
+		for (int rank = 0; rank < BOARD_SIZE; ++rank)
+		{
+			for (int file = 0; file < BOARD_SIZE; ++file)
+			{
+				int squareIndex = rank * BOARD_SIZE + file;
+				RECT squareRect = GetSquareRect(boardRect, file, rank);
+				
+				// Determine square color (alternating pattern)
+				bool isDark = (file + rank) % 2 == 1;
+				DrawChessSquare(hdc, squareRect, isDark);
+				
+				// Draw piece if present (with lift effect if selected)
+				Piece piece = board[squareIndex];
+				if (piece)
+				{
+					bool isSelected = (squareIndex == selectedSquare);
+					bool isHighlighted = std::find(highlightSquares.begin(), 
+												   highlightSquares.end(),
+												   squareIndex) != highlightSquares.end();
+					
+					RenderPiece(hdc, squareRect, piece, isSelected, isHighlighted);
+				}
+				else
+				{
+					// Draw highlight on empty squares (legal move destinations)
+					if (std::find(highlightSquares.begin(), highlightSquares.end(),
+								 squareIndex) != highlightSquares.end())
+					{
+						DrawHighlight(hdc, squareRect, m_config.highlightColor, 3);
+					}
+				}
+			}
+		}
+		
+		// Draw file and rank labels
+		if (m_config.showCoordinates)
+		{
+			RenderCoordinates(hdc, boardRect);
+		}
+	}
 
     // Render coordinate labels (a-h, 1-8) around board
     void ChessPieceRenderer::RenderCoordinates(HDC hdc, const RECT& boardRect)
@@ -240,7 +256,7 @@ namespace Chess
         DeleteObject(brush);
     }
 
-    // Draw chess piece with outline for better visibility
+    // Draw piece symbol with optional outline for visibility
     void ChessPieceRenderer::DrawPiece(HDC hdc, const RECT& rect, Piece piece)
     {
         if (piece.IsEmpty()) return;
@@ -255,6 +271,12 @@ namespace Chess
         HFONT oldFont = (HFONT)SelectObject(hdc, pieceFont);
         
         SetBkMode(hdc, TRANSPARENT);
+        
+        // Draw drop shadow first for depth effect
+        if (m_config.useShadow)
+        {
+            DrawPieceShadow(hdc, rect, pieceChar);
+        }
         
         // Determine main piece color
         COLORREF pieceColor = (piece.GetColor() == PlayerColor::White)
@@ -299,7 +321,7 @@ namespace Chess
         DeleteObject(pieceFont);
     }
 
-    // Draw shadow effect for piece (currently unused but available)
+    // Draw shadow effect for piece
     void ChessPieceRenderer::DrawPieceShadow(HDC hdc, const RECT& rect, wchar_t pieceChar)
     {
         RECT shadowRect = rect;
@@ -307,13 +329,17 @@ namespace Chess
         shadowRect.top += m_config.shadowOffset;
         shadowRect.right += m_config.shadowOffset;
         shadowRect.bottom += m_config.shadowOffset;
+
+        // Use a dark gray instead of pure black for a softer, more elegant look
+        // Pure black creates too much contrast on light squares
+        SetTextColor(hdc, RGB(80, 80, 90)); 
         
-        SetTextColor(hdc, RGB(0, 0, 0));
+        // Draw the shadow text
         DrawTextW(hdc, &pieceChar, 1, &shadowRect, 
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-	// Draw highlight on a square (border for selection, diamond for move hints)
+    // Draw highlight on a square (border for selection, diamond for move hints)
     void ChessPieceRenderer::DrawHighlight(HDC hdc, const RECT& rect, COLORREF color, int thickness)
     {
         // If thickness is high, this represents a selected piece

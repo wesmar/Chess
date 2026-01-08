@@ -51,16 +51,21 @@ namespace Chess
         // Visual settings for board and piece rendering
         struct RenderConfig
         {
-            // Color scheme
-            COLORREF lightSquareColor = RGB(240, 240, 245);     // Light squares (white)
-            COLORREF darkSquareColor = RGB(70, 80, 100);        // Dark squares (black)
-            COLORREF highlightColor = RGB(50, 205, 50);         // Legal move destination highlight
-            COLORREF selectionColor = RGB(255, 200, 100);       // Selected piece highlight
+            // "Brown" Theme (Warm & Classic)
+            COLORREF lightSquareColor = RGB(240, 217, 181);     // Warm beige
+            COLORREF darkSquareColor = RGB(181, 136, 99);       // Soft wood brown
+            
+            COLORREF highlightColor = RGB(205, 210, 106);       // Lichess-style lime (less neon)
+            COLORREF selectionColor = RGB(205, 210, 106);       // Same as highlight or slightly lighter
+            
+            // Pieces
             COLORREF lightPieceColor = RGB(255, 235, 180);      // White pieces (cream)
-            COLORREF darkPieceColor = RGB(20, 20, 20);          // Black pieces (near-black)
-            COLORREF coordinateColor = RGB(150, 150, 150);      // File/rank labels (gray)
-            COLORREF backgroundColor = RGB(30, 32, 38);         // Window background (dark)
-            COLORREF borderColor = RGB(60, 65, 75);             // Board border (medium gray)
+            COLORREF darkPieceColor = RGB(0, 0, 0);             // Pure black
+            
+            // UI
+            COLORREF backgroundColor = RGB(48, 46, 43);         // Dark gray/brown background
+            COLORREF borderColor = RGB(48, 46, 43);             // Matches background
+            COLORREF coordinateColor = RGB(200, 200, 200);      // Light gray for coordinate labels
             
             // Display settings
             double pieceScale = 0.75;                           // Piece size as fraction of square size
@@ -112,7 +117,7 @@ namespace Chess
         // Draw colored border around square (selection/highlight)
         void DrawHighlight(HDC hdc, const RECT& rect, COLORREF color, int thickness = 3);
         
-        // Draw drop shadow for piece (currently unused)
+        // Draw drop shadow for piece
         void DrawPieceShadow(HDC hdc, const RECT& rect, wchar_t pieceChar);
         
         // Calculate screen rectangle for board square (respects flip setting)
