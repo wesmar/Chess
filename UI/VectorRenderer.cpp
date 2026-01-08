@@ -313,19 +313,65 @@ namespace Chess
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    // Draw highlight border around square
+	// Draw highlight on a square (border for selection, diamond for move hints)
     void ChessPieceRenderer::DrawHighlight(HDC hdc, const RECT& rect, COLORREF color, int thickness)
     {
-        HPEN pen = CreatePen(PS_SOLID, thickness, color);
-        HPEN oldPen = (HPEN)SelectObject(hdc, pen);
-        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        
-        // Draw rectangle without fill
-        Rectangle(hdc, rect.left + thickness/2, rect.top + thickness/2, 
-                 rect.right - thickness/2, rect.bottom - thickness/2);
-        
-        SelectObject(hdc, oldPen);
-        SelectObject(hdc, oldBrush);
-        DeleteObject(pen);
+        // If thickness is high, this represents a selected piece
+        // Draw a framing border around the square
+        if (thickness >= 4)
+        {
+            HBRUSH frameBrush = CreateSolidBrush(color);
+            RECT frameRect = rect;
+
+            // Draw the border using FrameRect which is efficient for box highlights
+            FrameRect(hdc, &frameRect, frameBrush);
+
+            // Draw a second inner line to create the desired thickness effect
+            InflateRect(&frameRect, -1, -1);
+            FrameRect(hdc, &frameRect, frameBrush);
+
+            DeleteObject(frameBrush);
+            return;
+        }
+
+        // For legal move hints, draw a filled diamond (rhombus) shape
+        // This shape renders sharply in GDI without anti-aliasing artifacts
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+        int centerX = rect.left + width / 2;
+        int centerY = rect.top + height / 2;
+
+        // Size of the diamond relative to the square
+        int size = width / 6;
+
+        // Define the four vertices of the diamond
+        POINT vertices[4];
+        vertices[0] = { centerX, centerY - size }; // Top
+        vertices[1] = { centerX + size, centerY }; // Right
+        vertices[2] = { centerX, centerY + size }; // Bottom
+        vertices[3] = { centerX - size, centerY }; // Left
+
+        // Calculate a slightly darker version of the fill color for the outline
+        // This provides better definition against light squares without being too harsh
+        BYTE r = GetRValue(color);
+        BYTE g = GetGValue(color);
+        BYTE b = GetBValue(color);
+        COLORREF outlineColor = RGB(r * 0.6, g * 0.6, b * 0.6);
+
+        // Create drawing objects (solid fill and single pixel outline)
+        HBRUSH hBrush = CreateSolidBrush(color);
+        HPEN hPen = CreatePen(PS_SOLID, 1, outlineColor);
+
+        HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+
+        // Draw the filled diamond with outline
+        Polygon(hdc, vertices, 4);
+
+        // Restore context and clean up resources
+        SelectObject(hdc, hOldBrush);
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hBrush);
+        DeleteObject(hPen);
     }
 }

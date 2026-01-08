@@ -54,7 +54,7 @@ namespace Chess
             // Color scheme
             COLORREF lightSquareColor = RGB(240, 240, 245);     // Light squares (white)
             COLORREF darkSquareColor = RGB(70, 80, 100);        // Dark squares (black)
-            COLORREF highlightColor = RGB(255, 215, 0);         // Legal move destination highlight
+            COLORREF highlightColor = RGB(50, 205, 50);         // Legal move destination highlight
             COLORREF selectionColor = RGB(255, 200, 100);       // Selected piece highlight
             COLORREF lightPieceColor = RGB(255, 235, 180);      // White pieces (cream)
             COLORREF darkPieceColor = RGB(20, 20, 20);          // Black pieces (near-black)
