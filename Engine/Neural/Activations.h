@@ -96,7 +96,7 @@ namespace Neural
             int i = 0;
             for (; i + 16 <= count; i += 16)
             {
-                __m256i v = _mm256_load_si256(reinterpret_cast<const __m256i*>(input + i));
+                __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input + i));
                 v = _mm256_max_epi16(v, zero);
                 v = _mm256_min_epi16(v, max_val);
 
@@ -120,7 +120,7 @@ namespace Neural
             int i = 0;
             for (; i + 8 <= count; i += 8)
             {
-                __m128i v = _mm_load_si128(reinterpret_cast<const __m128i*>(input + i));
+                __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(input + i));
                 v = _mm_max_epi16(v, zero);
                 v = _mm_min_epi16(v, max_val);
 

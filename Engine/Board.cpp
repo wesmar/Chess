@@ -48,6 +48,48 @@ namespace Chess
             ResetToStartingPosition();
         }
     }
+	
+	// Custom copy constructor - avoid copying full 512-entry arrays
+	Board::Board(const Board& other)
+	{
+		*this = other;
+	}
+
+	// Optimized assignment operator - copy only active history entries
+	Board& Board::operator=(const Board& other)
+	{
+		if (this == &other) return *this;
+
+		// Copy fixed-size state
+		m_board = other.m_board;
+		m_sideToMove = other.m_sideToMove;
+		m_castlingRights = other.m_castlingRights;
+		m_enPassantSquare = other.m_enPassantSquare;
+		m_halfMoveClock = other.m_halfMoveClock;
+		m_fullMoveNumber = other.m_fullMoveNumber;
+		m_kingSquares[0] = other.m_kingSquares[0];
+		m_kingSquares[1] = other.m_kingSquares[1];
+		m_zobristKey = other.m_zobristKey;
+		m_pieceLists[0] = other.m_pieceLists[0];
+		m_pieceLists[1] = other.m_pieceLists[1];
+		m_incrementalScore = other.m_incrementalScore;
+		m_allOccupied = other.m_allOccupied;
+		
+		// Copy only active history entries (not all 512)
+		m_historyPly = other.m_historyPly;
+		for (int i = 0; i < m_historyPly; ++i)
+		{
+			m_moveHistory[i] = other.m_moveHistory[i];
+		}
+		
+		m_nullMovePly = other.m_nullMovePly;
+		for (int i = 0; i < m_nullMovePly; ++i)
+		{
+			m_nullMoveHistory[i] = other.m_nullMoveHistory[i];
+		}
+		
+		return *this;
+	}
 
     // Reset board to standard chess starting position
     void Board::ResetToStartingPosition()

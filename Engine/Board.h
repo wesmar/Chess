@@ -92,6 +92,10 @@ namespace Chess
         
         Board();                            // Initialize to starting position
         explicit Board(const std::string& fen);  // Initialize from FEN string
+		
+		// Custom copy constructor and assignment operator
+		Board(const Board& other);
+		Board& operator=(const Board& other);
 
         // ========== ACCESSORS ==========
 

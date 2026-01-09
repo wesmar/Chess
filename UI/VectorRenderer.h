@@ -113,6 +113,9 @@ namespace Chess
         
         // Draw piece symbol with optional outline for visibility
         void DrawPiece(HDC hdc, const RECT& rect, Piece piece);
+		
+		// Draw 4 corner diamonds for capture move hints (piece on target square)
+		void DrawCaptureHighlight(HDC hdc, const RECT& rect, COLORREF color);
         
         // Draw colored border around square (selection/highlight)
         void DrawHighlight(HDC hdc, const RECT& rect, COLORREF color, int thickness = 3);

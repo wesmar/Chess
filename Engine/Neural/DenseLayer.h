@@ -69,7 +69,7 @@ namespace Neural
                         __m256i in = _mm256_loadu_si256(
                             reinterpret_cast<const __m256i*>(input + i));
                         // Load 32 int8 weights
-                        __m256i w = _mm256_loadu_si256(
+                        __m256i w = _mm256_load_si256(
                             reinterpret_cast<const __m256i*>(weights + i));
 
                         // Multiply with sign extension and accumulate
