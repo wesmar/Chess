@@ -17,6 +17,8 @@
     "GAME_AI_DIFFICULTY": "AI Difficulty:",
     "GAME_LEVEL": "Level: %d",
     "GAME_AUTO_QUEEN": "Auto-promote to Queen",
+    "GAME_UNDO_DEPTH": "Undo depth limit:",
+    "GAME_UNDO_DEPTH_LABEL": "Depth: %d",
 
     "APPEARANCE_LANGUAGE": "Language:",
     "APPEARANCE_SHADOWS": "Show piece shadows",

@@ -17,6 +17,8 @@
     "GAME_AI_DIFFICULTY": "KI-Schwierigkeit:",
     "GAME_LEVEL": "Stufe: %d",
     "GAME_AUTO_QUEEN": "Automatisch zur Dame umwandeln",
+    "GAME_UNDO_DEPTH": "Rückgängig-Tiefenlimit:",
+    "GAME_UNDO_DEPTH_LABEL": "Tiefe: %d",
 
     "APPEARANCE_LANGUAGE": "Sprache:",
     "APPEARANCE_SHADOWS": "Figurenschatten anzeigen",

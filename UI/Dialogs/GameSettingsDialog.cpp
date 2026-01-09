@@ -87,6 +87,14 @@ namespace Chess
                 swprintf_s(label, Lang::Get("GAME_LEVEL", L"Level: %d").c_str(), diff);
                 SetDlgItemText(hwnd, IDC_DIFFICULTY_LABEL, label);
             }
+            else if (hSlider == GetDlgItem(hwnd, IDC_UNDO_DEPTH_SLIDER))
+            {
+                // Update undo depth label as slider moves
+                int depth = static_cast<int>(SendMessage(hSlider, TBM_GETPOS, 0, 0));
+                wchar_t label[64];
+                swprintf_s(label, Lang::Get("GAME_UNDO_DEPTH_LABEL", L"Depth: %d").c_str(), depth);
+                SetDlgItemText(hwnd, IDC_UNDO_DEPTH_LABEL, label);
+            }
             return TRUE;
         }
         
@@ -136,7 +144,7 @@ namespace Chess
         if (!settings) return;
         
         // Create modern font for dialog controls
-        HFONT hFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        HFONT hFont = CreateFont(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                 DEFAULT_PITCH, L"Segoe UI");
@@ -254,7 +262,27 @@ namespace Chess
             WS_CHILD | BS_AUTOCHECKBOX,
             rcTab.left + 20, rcTab.top + 190, 250, 20,
             hwnd, (HMENU)IDC_AUTO_QUEEN_CHECK, GetModuleHandle(nullptr), nullptr);
-        
+
+		CreateWindowEx(0, L"STATIC", Lang::Get("GAME_UNDO_DEPTH", L"Undo depth limit:").c_str(), 
+			WS_CHILD, 
+			rcTab.left + 20, rcTab.top + 220, 150, 20, 
+			hwnd, (HMENU)IDC_UNDO_DEPTH_TEXT, GetModuleHandle(nullptr), nullptr);
+
+        // Undo depth slider (1-3 moves)
+        HWND hUndoSlider = CreateWindowEx(0, TRACKBAR_CLASS, L"",
+            WS_CHILD | TBS_AUTOTICKS | TBS_HORZ,
+            rcTab.left + 20, rcTab.top + 240, 250, 30,
+            hwnd, (HMENU)IDC_UNDO_DEPTH_SLIDER, GetModuleHandle(nullptr), nullptr);
+        SendMessage(hUndoSlider, TBM_SETRANGE, TRUE, MAKELONG(1, 3));
+        SendMessage(hUndoSlider, TBM_SETPOS, TRUE, settings->maxUndoDepth);
+
+        wchar_t undoLabel[64];
+        swprintf_s(undoLabel, Lang::Get("GAME_UNDO_DEPTH_LABEL", L"Depth: %d").c_str(), settings->maxUndoDepth);
+        CreateWindowEx(0, L"STATIC", undoLabel,
+            WS_CHILD,
+            rcTab.left + 280, rcTab.top + 245, 100, 20,
+            hwnd, (HMENU)IDC_UNDO_DEPTH_LABEL, GetModuleHandle(nullptr), nullptr);
+
         // ========== APPEARANCE TAB CONTROLS ==========
         // Visual customization options
 
@@ -340,6 +368,8 @@ namespace Chess
         SetControlFont(hwnd, IDC_MODE_RADIO_CVC, hFont);
         SetControlFont(hwnd, IDC_DIFFICULTY_LABEL, hFont);
         SetControlFont(hwnd, IDC_AUTO_QUEEN_CHECK, hFont);
+        SetControlFont(hwnd, IDC_UNDO_DEPTH_LABEL, hFont);
+		SetControlFont(hwnd, IDC_UNDO_DEPTH_TEXT, hFont);
         SetControlFont(hwnd, IDC_LANGUAGE_COMBO, hFont);
         SetControlFont(hwnd, IDC_PIECE_SHADOW_CHECK, hFont);
         SetControlFont(hwnd, IDC_WHITE_NAME_LABEL, hFont);
@@ -369,7 +399,10 @@ namespace Chess
         ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_SLIDER), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_LABEL), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_AUTO_QUEEN_CHECK), SW_HIDE);
-        
+        ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_SLIDER), SW_HIDE);
+        ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_LABEL), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_TEXT), SW_HIDE);
+
         ShowWindow(GetDlgItem(hwnd, IDC_LANGUAGE_COMBO), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_PIECE_SHADOW_CHECK), SW_HIDE);
         
@@ -397,6 +430,8 @@ namespace Chess
             ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_SLIDER), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_LABEL), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_AUTO_QUEEN_CHECK), SW_SHOW);
+            ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_SLIDER), SW_SHOW);
+            ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_TEXT), SW_SHOW);
             break;
             
         case 2: // Appearance tab - language and visual effects
@@ -450,6 +485,13 @@ namespace Chess
         // Read gameplay options
         settings->autoPromoteQueen = (IsDlgButtonChecked(hwnd, IDC_AUTO_QUEEN_CHECK) == BST_CHECKED);
         settings->showPieceShadows = (IsDlgButtonChecked(hwnd, IDC_PIECE_SHADOW_CHECK) == BST_CHECKED);
+
+        // Read undo depth from slider
+        HWND hUndoSlider = GetDlgItem(hwnd, IDC_UNDO_DEPTH_SLIDER);
+        if (hUndoSlider)
+        {
+            settings->maxUndoDepth = static_cast<int>(SendMessage(hUndoSlider, TBM_GETPOS, 0, 0));
+        }
         
         // Read language selection from combo box
         HWND hCombo = GetDlgItem(hwnd, IDC_LANGUAGE_COMBO);
@@ -512,6 +554,11 @@ namespace Chess
         
         settings.autoPromoteQueen = GetPrivateProfileInt(L"Game", L"AutoPromoteQueen", 1, iniPath.c_str()) != 0;
         settings.useNeuralEval = GetPrivateProfileInt(L"Game", L"UseNeuralEval", 0, iniPath.c_str()) != 0;
+
+        // Load undo depth setting with bounds checking
+        settings.maxUndoDepth = GetPrivateProfileInt(L"Game", L"MaxUndoDepth", 3, iniPath.c_str());
+        if (settings.maxUndoDepth < 1) settings.maxUndoDepth = 1;
+        if (settings.maxUndoDepth > 3) settings.maxUndoDepth = 3;
 
         // Load appearance settings
         wchar_t langBuffer[64] = {};
@@ -577,6 +624,8 @@ namespace Chess
         WritePrivateProfileString(L"Game", L"AutoPromoteQueen", settings.autoPromoteQueen ? L"1" : L"0", iniPath.c_str());
         WritePrivateProfileString(L"Game", L"UseNeuralEval",
             settings.useNeuralEval ? L"1" : L"0", iniPath.c_str());
+        WritePrivateProfileString(L"Game", L"MaxUndoDepth",
+            std::to_wstring(settings.maxUndoDepth).c_str(), iniPath.c_str());
 
         // Save appearance settings
         WritePrivateProfileString(L"Display", L"Language", settings.language.c_str(), iniPath.c_str());

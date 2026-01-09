@@ -247,10 +247,11 @@ namespace Chess
         [[nodiscard]] std::vector<int> GetValidTargetSquares(int fromSquare) const;
         
         // ========== CONFIGURATION ==========
-        
+
         void SetPlayerName(PlayerColor color, const std::string& name);
         void SetGameMode(GameMode mode) { m_gameMode = mode; }
         void SetTimeControl(int minutes, int incrementSeconds = 0);
+        void SetMaxUndoDepth(int depth);
         
         // ========== HELPER METHODS ==========
         
@@ -287,6 +288,7 @@ namespace Chess
         std::vector<Move> m_moveHistory;
         std::vector<Board> m_boardHistory;  // For undo/redo
         size_t m_currentHistoryIndex = 0;
+        int m_maxUndoDepth = 3;  // Maximum undo moves (1-3)
 
         GameRecord m_gameRecord;
 

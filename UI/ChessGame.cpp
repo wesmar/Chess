@@ -1940,27 +1940,31 @@ namespace Chess
     }
 
     // Undo last move
-    bool ChessGame::UndoMove()
-    {
-        if (m_currentHistoryIndex == 0)
-        {
-            return false; // No moves to undo
-        }
-        
-        m_currentHistoryIndex--;
-        m_board = m_boardHistory[m_currentHistoryIndex];
-        
-        // Remove last move from history
-        if (!m_moveHistory.empty())
-        {
-            m_moveHistory.pop_back();
-        }
-        
-        UpdateLegalMoves();
-        UpdateHighlightedSquares();
-        
-        return true;
-    }
+	bool ChessGame::UndoMove()
+	{
+		if (m_currentHistoryIndex == 0)
+		{
+			return false; // No moves to undo - at game start
+		}
+
+		// Check undo depth limit - count from current position backwards
+		size_t movesFromStart = m_currentHistoryIndex;
+		size_t movesFromLatest = m_boardHistory.size() - 1 - m_currentHistoryIndex;
+		
+		// Can only undo if we haven't already undone max depth moves
+		if (movesFromLatest >= static_cast<size_t>(m_maxUndoDepth))
+		{
+			return false; // Already undone max depth moves
+		}
+
+		m_currentHistoryIndex--;
+		m_board = m_boardHistory[m_currentHistoryIndex];
+
+		UpdateLegalMoves();
+		UpdateHighlightedSquares();
+
+		return true;
+	}
 
     // Redo previously undone move
     bool ChessGame::RedoMove()
@@ -2110,6 +2114,14 @@ namespace Chess
         m_timeControl.incrementMs = incrementSeconds * 1000;
     }
 
+    // Set maximum undo depth (1-3 moves)
+    void ChessGame::SetMaxUndoDepth(int depth)
+    {
+        if (depth < 1) depth = 1;
+        if (depth > 3) depth = 3;
+        m_maxUndoDepth = depth;
+    }
+
     // Update internal legal moves cache
     void ChessGame::UpdateLegalMoves()
     {
@@ -2135,12 +2147,19 @@ namespace Chess
     }
 
     // Add move to history and save board state
-    void ChessGame::AddMoveToHistory(const Move& move)
-    {
-        m_moveHistory.push_back(move);
-        m_boardHistory.push_back(m_board);
-        m_currentHistoryIndex = m_boardHistory.size() - 1;
-    }
+	void ChessGame::AddMoveToHistory(const Move& move)
+	{
+		// If we make a new move after undoing, remove the unnecessary branch of history
+		if (m_currentHistoryIndex < m_boardHistory.size() - 1)
+		{
+			m_moveHistory.erase(m_moveHistory.begin() + m_currentHistoryIndex, m_moveHistory.end());
+			m_boardHistory.erase(m_boardHistory.begin() + m_currentHistoryIndex + 1, m_boardHistory.end());
+		}
+		
+		m_moveHistory.push_back(move);
+		m_boardHistory.push_back(m_board);
+		m_currentHistoryIndex = m_boardHistory.size() - 1;
+	}
 
     // Update PGN game record with current game state
     void ChessGame::UpdateGameRecord()

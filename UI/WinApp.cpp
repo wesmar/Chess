@@ -106,6 +106,7 @@ namespace Chess
 		GameSettingsDialog::Settings settings;
 		GameSettingsDialog::LoadFromINI(settings);
 		m_game.GetCurrentAIPlayer()->SetThreads(settings.numThreads);
+		m_game.SetMaxUndoDepth(settings.maxUndoDepth);
 
 		// Initialize game with correct mode after window is ready
 		m_game.SetGameMode(m_currentGameMode);
@@ -704,7 +705,10 @@ namespace Chess
 					config.showCoordinates = settings.showCoordinates;
 					config.useShadow = settings.showPieceShadows;
 					m_renderer.SetConfig(config);
-					
+
+					// Apply undo depth setting
+					m_game.SetMaxUndoDepth(settings.maxUndoDepth);
+
 					// Redraw window with new settings
 					InvalidateRect(m_hwnd, nullptr, TRUE);
 				}
@@ -1330,6 +1334,13 @@ namespace Chess
 
 	void MainWindow::CompleteAIMove()
 	{
+		// Safety check: Don't execute move if AI thinking was aborted
+		// This can happen if user started undo/new game during AI calculation
+		if (!m_aiThinking)
+		{
+			return; // Search was aborted, discard result
+		}
+
 		// Retrieve AI's calculated move from async future
 		if (m_aiFuture.valid())
 		{
@@ -1471,6 +1482,15 @@ namespace Chess
 
     void MainWindow::LoadGameFromFile(const std::wstring& filename)
     {
+        // CRITICAL: Abort AI search before loading new game state
+        if (m_aiThinking)
+        {
+            if (auto& ai = m_game.GetCurrentAIPlayer())
+            {
+                ai->AbortSearch();
+            }
+            m_aiThinking = false;
+        }
         // Convert wide string and load PGN game
         std::string narrowFilename = WStringToString(filename);
         m_game.LoadPGN(narrowFilename);
@@ -1560,6 +1580,14 @@ namespace Chess
 
 	void MainWindow::NewGame()
 	{
+		// CRITICAL: Abort any ongoing AI search before resetting game state
+		if (m_aiThinking)
+		{
+			if (auto& ai = m_game.GetCurrentAIPlayer())
+			{
+				ai->AbortSearch();
+			}
+		}
 		// Determine who plays white based on board flip setting
 		// When board is flipped (black on bottom), human plays black
 		// When board is normal (white on bottom), human plays white
@@ -1577,6 +1605,16 @@ namespace Chess
 
     void MainWindow::UndoMove()
     {
+        // CRITICAL: Stop AI search immediately to prevent applying moves to changed board state
+        // Race condition protection: AI thread must be aborted before board state changes
+        if (m_aiThinking)
+        {
+            if (auto& ai = m_game.GetCurrentAIPlayer())
+            {
+                ai->AbortSearch();
+            }
+            m_aiThinking = false;
+        }
         // Undo last move and update display
         if (m_game.UndoMove())
         {
@@ -1588,6 +1626,15 @@ namespace Chess
 
     void MainWindow::RedoMove()
     {
+        // CRITICAL: Stop AI search immediately (same protection as UndoMove)
+        if (m_aiThinking)
+        {
+            if (auto& ai = m_game.GetCurrentAIPlayer())
+            {
+                ai->AbortSearch();
+            }
+            m_aiThinking = false;
+        }
         // Redo previously undone move
         if (m_game.RedoMove())
         {

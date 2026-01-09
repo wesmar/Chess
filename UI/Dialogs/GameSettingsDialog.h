@@ -35,6 +35,7 @@ namespace Chess
             bool autoPromoteQueen = true;                   // Skip promotion dialog
             int numThreads = 4;                             // AI search thread count
             bool useNeuralEval = false;                     // Use neural network evaluation
+            int maxUndoDepth = 3;                           // Maximum undo moves (1-3)
 
             // ---------- Appearance Settings ----------
             std::wstring language = L"English";                      // UI language

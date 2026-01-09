@@ -17,6 +17,8 @@
     "GAME_AI_DIFFICULTY": "Poziom trudności:",
     "GAME_LEVEL": "Poziom: %d",
     "GAME_AUTO_QUEEN": "Automatyczna promocja do hetmana",
+    "GAME_UNDO_DEPTH": "Limit cofania ruchów:",
+    "GAME_UNDO_DEPTH_LABEL": "Głębokość: %d",
 
     "APPEARANCE_LANGUAGE": "Język:",
     "APPEARANCE_SHADOWS": "Pokaż cienie figur",

@@ -17,6 +17,8 @@
     "GAME_AI_DIFFICULTY": "Difficulté IA :",
     "GAME_LEVEL": "Niveau : %d",
     "GAME_AUTO_QUEEN": "Promotion automatique en Dame",
+    "GAME_UNDO_DEPTH": "Limite de profondeur d'annulation :",
+    "GAME_UNDO_DEPTH_LABEL": "Profondeur : %d",
 
     "APPEARANCE_LANGUAGE": "Langue :",
     "APPEARANCE_SHADOWS": "Afficher les ombres des pièces",
