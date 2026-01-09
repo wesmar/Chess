@@ -240,13 +240,13 @@ namespace Chess
 
         CreateWindowEx(0, L"STATIC", Lang::Get("GAME_AI_DIFFICULTY", L"AI Difficulty:").c_str(),
             WS_CHILD,
-            rcTab.left + 20, rcTab.top + 120, 120, 20,
-            hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+            rcTab.left + 20, rcTab.top + 145, 120, 20,
+            hwnd, (HMENU)IDC_AI_DIFFICULTY_TEXT, GetModuleHandle(nullptr), nullptr);
         
         // AI difficulty slider (1-10 levels)
         HWND hDiffSlider = CreateWindowEx(0, TRACKBAR_CLASS, L"",
             WS_CHILD | TBS_AUTOTICKS | TBS_HORZ,
-            rcTab.left + 20, rcTab.top + 140, 250, 30,
+            rcTab.left + 20, rcTab.top + 165, 250, 30,
             hwnd, (HMENU)IDC_DIFFICULTY_SLIDER, GetModuleHandle(nullptr), nullptr);
         SendMessage(hDiffSlider, TBM_SETRANGE, TRUE, MAKELONG(1, 10));
         SendMessage(hDiffSlider, TBM_SETPOS, TRUE, settings->aiDifficulty);
@@ -255,23 +255,23 @@ namespace Chess
         swprintf_s(diffLabel, Lang::Get("GAME_LEVEL", L"Level: %d").c_str(), settings->aiDifficulty);
         CreateWindowEx(0, L"STATIC", diffLabel,
             WS_CHILD,
-            rcTab.left + 280, rcTab.top + 145, 100, 20,
+            rcTab.left + 280, rcTab.top + 170, 100, 20,
             hwnd, (HMENU)IDC_DIFFICULTY_LABEL, GetModuleHandle(nullptr), nullptr);
         
         CreateWindowEx(0, L"BUTTON", Lang::Get("GAME_AUTO_QUEEN", L"Auto-promote to Queen").c_str(),
             WS_CHILD | BS_AUTOCHECKBOX,
-            rcTab.left + 20, rcTab.top + 190, 250, 20,
+            rcTab.left + 20, rcTab.top + 110, 250, 20,
             hwnd, (HMENU)IDC_AUTO_QUEEN_CHECK, GetModuleHandle(nullptr), nullptr);
 
 		CreateWindowEx(0, L"STATIC", Lang::Get("GAME_UNDO_DEPTH", L"Undo depth limit:").c_str(), 
 			WS_CHILD, 
-			rcTab.left + 20, rcTab.top + 220, 150, 20, 
+			rcTab.left + 20, rcTab.top + 215, 150, 20, 
 			hwnd, (HMENU)IDC_UNDO_DEPTH_TEXT, GetModuleHandle(nullptr), nullptr);
 
         // Undo depth slider (1-3 moves)
         HWND hUndoSlider = CreateWindowEx(0, TRACKBAR_CLASS, L"",
             WS_CHILD | TBS_AUTOTICKS | TBS_HORZ,
-            rcTab.left + 20, rcTab.top + 240, 250, 30,
+            rcTab.left + 20, rcTab.top + 235, 250, 30,
             hwnd, (HMENU)IDC_UNDO_DEPTH_SLIDER, GetModuleHandle(nullptr), nullptr);
         SendMessage(hUndoSlider, TBM_SETRANGE, TRUE, MAKELONG(1, 3));
         SendMessage(hUndoSlider, TBM_SETPOS, TRUE, settings->maxUndoDepth);
@@ -280,7 +280,7 @@ namespace Chess
         swprintf_s(undoLabel, Lang::Get("GAME_UNDO_DEPTH_LABEL", L"Depth: %d").c_str(), settings->maxUndoDepth);
         CreateWindowEx(0, L"STATIC", undoLabel,
             WS_CHILD,
-            rcTab.left + 280, rcTab.top + 245, 100, 20,
+            rcTab.left + 280, rcTab.top + 240, 100, 20,
             hwnd, (HMENU)IDC_UNDO_DEPTH_LABEL, GetModuleHandle(nullptr), nullptr);
 
         // ========== APPEARANCE TAB CONTROLS ==========
@@ -367,6 +367,7 @@ namespace Chess
         SetControlFont(hwnd, IDC_MODE_RADIO_HVC, hFont);
         SetControlFont(hwnd, IDC_MODE_RADIO_CVC, hFont);
         SetControlFont(hwnd, IDC_DIFFICULTY_LABEL, hFont);
+		SetControlFont(hwnd, IDC_AI_DIFFICULTY_TEXT, hFont);
         SetControlFont(hwnd, IDC_AUTO_QUEEN_CHECK, hFont);
         SetControlFont(hwnd, IDC_UNDO_DEPTH_LABEL, hFont);
 		SetControlFont(hwnd, IDC_UNDO_DEPTH_TEXT, hFont);
@@ -398,6 +399,7 @@ namespace Chess
         ShowWindow(GetDlgItem(hwnd, IDC_MODE_RADIO_CVC), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_SLIDER), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_LABEL), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_AI_DIFFICULTY_TEXT), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_AUTO_QUEEN_CHECK), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_SLIDER), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_LABEL), SW_HIDE);
@@ -429,6 +431,7 @@ namespace Chess
             ShowWindow(GetDlgItem(hwnd, IDC_MODE_RADIO_CVC), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_SLIDER), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_DIFFICULTY_LABEL), SW_SHOW);
+			ShowWindow(GetDlgItem(hwnd, IDC_AI_DIFFICULTY_TEXT), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_AUTO_QUEEN_CHECK), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_SLIDER), SW_SHOW);
             ShowWindow(GetDlgItem(hwnd, IDC_UNDO_DEPTH_TEXT), SW_SHOW);
