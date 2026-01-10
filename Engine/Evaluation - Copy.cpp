@@ -295,11 +295,11 @@ namespace Chess
                 // We count attackers by piece type with different weights
                 
                 // Scan for enemy piece attackers
-				const PieceList& enemyPieces = board.GetPieceList(enemyColor);
-                for (int idx = 0; idx < enemyPieces.count; ++idx)
+                for (int sq = 0; sq < 64; ++sq)
                 {
-                    int sq = enemyPieces.squares[idx];
                     Piece piece = board.GetPieceAt(sq);
+                    if (piece.IsEmpty() || !piece.IsColor(enemyColor))
+                        continue;
 
                     PieceType type = piece.GetType();
 
@@ -828,41 +828,44 @@ namespace Chess
         if (rank < minRank || rank > maxRank)
             return false;
 
-		// Check if enemy pawns can attack this square
+        // Check if enemy pawns can attack this square
+        // Need to check three files: left, center, right
         PlayerColor enemyColor = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+        int pawnDirection = (color == PlayerColor::White) ? -1 : 1;  // Direction enemy pawns advance
 
-        // Check if enemy pawns can attack this square now or in the future
-        // We scan adjacent files from the square towards enemy's starting rank
-        // If any enemy pawn is found, it could potentially advance and attack
-        int enemyStartRank = (enemyColor == PlayerColor::White) ? 1 : 6;
-        int scanDirection = (enemyColor == PlayerColor::White) ? -1 : 1;
-        int scanStart = rank - scanDirection;
-
-        // Check left adjacent file
+        // Check left file for enemy pawns
         if (file > 0)
         {
-            for (int r = scanStart; r >= 0 && r < 8; r -= scanDirection)
+            int checkFile = file - 1;
+            int startRank = (color == PlayerColor::White) ? rank : 0;
+            int endRank = (color == PlayerColor::White) ? 0 : rank;
+            
+            for (int r = startRank; r >= endRank && r < 8; r += pawnDirection)
             {
-                Piece p = board.GetPieceAt(file - 1, r);
+                Piece p = board.GetPieceAt(checkFile, r);
                 if (p.IsType(PieceType::Pawn) && p.IsColor(enemyColor))
-                    return false;
+                    return false;  // Enemy pawn can attack
             }
         }
 
-        // Check right adjacent file
+        // Check right file for enemy pawns
         if (file < 7)
         {
-            for (int r = scanStart; r >= 0 && r < 8; r -= scanDirection)
+            int checkFile = file + 1;
+            int startRank = (color == PlayerColor::White) ? rank : 0;
+            int endRank = (color == PlayerColor::White) ? 0 : rank;
+            
+            for (int r = startRank; r >= endRank && r < 8; r += pawnDirection)
             {
-                Piece p = board.GetPieceAt(file + 1, r);
+                Piece p = board.GetPieceAt(checkFile, r);
                 if (p.IsType(PieceType::Pawn) && p.IsColor(enemyColor))
-                    return false;
+                    return false;  // Enemy pawn can attack
             }
         }
 
         return true;  // No enemy pawns can attack this square
-	}
-	
+    }
+
     // Evaluate outpost bonuses for knights and bishops
     // Outposts provide stable placement for minor pieces without pawn threats
     //
@@ -1318,22 +1321,18 @@ namespace Chess
 
                 int egPieceScore = value + egPST;
 
-				// Penalize exposed queen in middlegame
+                // Penalize exposed queen in middlegame
                 // Queen on attacked square is vulnerable to tactics
-                // Undefended queen under attack is much more serious
                 if (type == PieceType::Queen)
                 {
                     PlayerColor enemyColor = (color == PlayerColor::White) ?
                         PlayerColor::Black : PlayerColor::White;
                     if (IsSquareAttacked(board, sq, enemyColor))
                     {
-                        bool defended = IsDefended(board, sq, color);
-                        int penalty = defended ? 35 : 110;
-                        
                         if (color == PlayerColor::White)
-                            mgScore -= penalty;
+                            mgScore -= 150;  // Queen under attack penalty
                         else
-                            mgScore += penalty;
+                            mgScore += 150;
                     }
                 }
 

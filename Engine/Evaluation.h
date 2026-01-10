@@ -44,4 +44,19 @@ namespace Chess
     // Used for tapered evaluation (interpolating between middlegame and endgame scores)
     // Returns: 256 at start (full material), 0 in bare king endgame
     int ComputePhase(const Board& board);
+	
+	// Check if square is outpost for given color
+    // Outpost = square on 4th-6th rank that cannot be attacked by enemy pawns
+    // Strong knights/bishops on outposts have significant positional value
+    bool IsOutpostSquare(const Board& board, int square, PlayerColor color);
+    
+    // Evaluate outpost bonuses for knights and bishops
+    // Knights on outposts are especially strong (control center, hard to dislodge)
+    // Returns total outpost bonus (positive for white advantage)
+    int EvaluateOutposts(const Board& board);
+	
+	// Evaluate rook placement on open and semi-open files
+    // Rooks are most effective on files without pawns (open) or with only enemy pawns (semi-open)
+    // Returns total rook file bonus (positive for white advantage)
+    int EvaluateRookFiles(const Board& board);
 }

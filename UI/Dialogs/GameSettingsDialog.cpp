@@ -207,7 +207,7 @@ namespace Chess
         
         // Animation speed slider (100-500ms range)
         HWND hSlider = CreateWindowEx(0, TRACKBAR_CLASS, L"",
-            WS_CHILD | TBS_AUTOTICKS | TBS_HORZ,
+            WS_CHILD | TBS_HORZ,
             rcTab.left + 20, rcTab.top + 160, 250, 30,
             hwnd, (HMENU)IDC_ANIM_SPEED_SLIDER, GetModuleHandle(nullptr), nullptr);
         SendMessage(hSlider, TBM_SETRANGE, TRUE, MAKELONG(100, 500));
