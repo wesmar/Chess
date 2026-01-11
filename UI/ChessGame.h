@@ -92,6 +92,8 @@ namespace Chess
         // Move ordering heuristics for main thread
         Move m_killerMoves[MAX_PLY][2];     // Killer move heuristic
         std::atomic<int> m_history[2][64][64];           // History heuristic (per side)
+        Move m_counterMoves[2][64][64];        // Countermove heuristic [side][from][to]   
+
 
         int m_numThreads = 1;               // Parallel search threads
         std::atomic<bool> m_abortSearch{false};  // Search abort flag

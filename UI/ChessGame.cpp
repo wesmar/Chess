@@ -51,7 +51,7 @@ namespace Chess
             m_killerMoves[i][1] = Move();
         }
 
-        // Initialize shared history heuristic tables (separate per side)
+        // Initialize shared history heuristic tables and counter moves (separate per side)
         for (int side = 0; side < 2; ++side)
         {
             for (int from = 0; from < 64; ++from)
@@ -59,10 +59,12 @@ namespace Chess
                 for (int to = 0; to < 64; ++to)
                 {
                     m_history[side][from][to].store(0, std::memory_order_relaxed);
+                    m_counterMoves[side][from][to] = Move();
                 }
             }
         }
 
+        // Load NNUE neural network for enhanced evaluation if available
         if (m_evaluator.LoadNnue("nn-small.nnue"))
         {
             m_evaluator.SetMode(Neural::EvalMode::Classical);
@@ -152,11 +154,32 @@ namespace Chess
         if (move == m_killerMoves[ply][0]) return 800000;
         if (move == m_killerMoves[ply][1]) return 700000;
 
-		// History heuristic: use shared table for the side that is making the move
+        // Counter move heuristic - moves that refute opponent's previous move
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
+
+        if (ply > 0 && board.GetHistoryPly() > 0)
+        {
+            int prevFrom = -1, prevTo = -1;
+            if (board.GetHistoryPly() > 0)
+            {
+                const auto& lastRecord = board.GetLastMoveRecord();
+                prevFrom = lastRecord.move.GetFrom();
+                prevTo = lastRecord.move.GetTo();
+            }
+
+            if (prevFrom >= 0 && prevTo >= 0)
+            {
+                int oppSide = 1 - sideIndex;
+                Move counterMove = m_counterMoves[oppSide][prevFrom][prevTo];
+                if (move == counterMove)
+                    return 600000;
+            }
+        }
+
+        // History heuristic: use shared table for the side that is making the move
         int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
-        
+
         // Tactical bonus for moves to central squares
         // Central control is crucial in chess - pieces on central squares
         // control more of the board and create tactical opportunities
@@ -174,8 +197,7 @@ namespace Chess
         
         return historyScore + centerBonus;
     }
-
-    // Sort moves by score for better alpha-beta pruning efficiency
+	// Sort moves by score for better alpha-beta pruning efficiency
     void AIPlayer::OrderMoves(MoveList& moves, const Board& board, Move ttMove, int ply)
     {
         std::vector<std::pair<int, Move>> scoredMoves;
@@ -379,7 +401,6 @@ namespace Chess
 			std::uniform_int_distribution<> dis(0, candidateCount - 1);
 			return candidates[dis(gen)];
 		}
-
 		// Level 2: Amateur-friendly play (2-ply minimax)
 		// Looks ahead to opponent's best response to avoid obvious blunders
 		// Smaller margin (250) keeps some variety without terrible moves
@@ -504,6 +525,7 @@ namespace Chess
 				for (int to = 0; to < 64; ++to)
 				{
 					m_history[side][from][to].store(0, std::memory_order_relaxed);
+					m_counterMoves[side][from][to] = Move();
 				}
 			}
 		}
@@ -535,7 +557,7 @@ namespace Chess
 			// Root-parallel search with PV searched first (proper root PVS)
 			if (m_numThreads > 1 && legalMoves.size() > 1 && depth >= 4)
 			{
-				// 1) Search PV move first in main thread with full window
+				// Search PV move first in main thread with full window
 				searchBoard.MakeMoveUnchecked(legalMoves[0]);
 				ThreadLocalData pvTld;
 				int pvScore = -WorkerAlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1, pvTld);
@@ -549,7 +571,7 @@ namespace Chess
 					alpha = pvScore;
 				}
 
-				// 2) If PV already fails high or time is up, skip launching workers
+				// If PV already fails high or time is up, skip launching workers
 				if (pvScore < beta && !ShouldStop())
 				{
 					// Launch workers for remaining moves starting from index 1
@@ -682,7 +704,6 @@ namespace Chess
 
 		return bestMoveSoFar;
 	}
-
 	// Filter pseudo-legal moves to legal moves by verifying king safety
     MoveList AIPlayer::FilterLegalMoves(Board& board, const MoveList& pseudoMoves,
                                          PlayerColor sideToMove, PlayerColor opponentColor)
@@ -726,33 +747,35 @@ namespace Chess
         if (beta > mateBeta) beta = mateBeta;
         if (alpha >= beta) return alpha;
 
-		// Futility pruning - skip nodes unlikely to raise alpha
+        // Futility pruning - skip nodes unlikely to raise alpha
         // In positions far below alpha with little depth remaining, trying to improve
         // the score is futile. Skip full search and return approximate value.
         // Only apply when not in check (dangerous positions need full analysis)
-        if (m_difficulty > 6 && depth <= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
+        if (m_difficulty > 6 && depth <= 4 && !board.IsInCheck(board.GetCurrentPlayer()))
         {
             int staticEval = m_evaluator.Evaluate(board);
-            int futilityMargin = 200 * depth;  // Larger margin for deeper positions
+            int futilityMargin = 80 + 100 * depth;
 
             if (staticEval + futilityMargin <= alpha)
             {
-                return alpha;  // Position too weak to improve alpha
+                return alpha;
             }
         }
-        
-        // Razoring - reduce depth for positions far above beta
+
+        // Reverse futility pruning - return beta if position is too good
         // If position evaluation exceeds beta by large margin, opponent likely
-        // has better alternatives earlier in tree. Reduce search depth.
-        if (m_difficulty > 6 && depth <= 2 && !board.IsInCheck(board.GetCurrentPlayer()))
+        // has better alternatives earlier in tree. Return early cutoff.
+        if (m_difficulty > 6 && depth <= 3 && !board.IsInCheck(board.GetCurrentPlayer()))
         {
             int staticEval = m_evaluator.Evaluate(board);
-            if (staticEval - 150 >= beta)
+            int rfpMargin = 120 * depth;
+
+            if (staticEval - rfpMargin >= beta)
             {
-                return beta;  // Position too good, opponent won't allow this line
+                return beta;
             }
         }
-        
+
         // Probe transposition table for cached result
         uint64_t zobristKey = board.GetZobristKey();
         Move ttMove;
@@ -796,22 +819,34 @@ namespace Chess
             return 0; // Stalemate
         }
 
-		// Null move pruning - disabled in endgames to avoid zugzwang errors
-		// In positions with low material (phase < 64), zugzwang is common
-		// and null-move can produce false beta cutoffs
-		int phase = ComputePhase(board);
-		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
-		{
-			const int R = 2;
-			board.MakeNullMoveUnchecked();
-			int score = -AlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
-			board.UndoNullMove();
+        // Null move pruning - disabled in endgames to avoid zugzwang errors
+        // In positions with low material (phase < 64), zugzwang is common
+        // and null-move can produce false beta cutoffs
+        int phase = ComputePhase(board);
+        if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
+        {
+            int R = 3 + depth / 4;
+            if (R > depth - 1) R = depth - 1;
 
-			if (score >= beta)
-			{
-				return beta;
-			}
-		}
+            board.MakeNullMoveUnchecked();
+            int score = -AlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1);
+            board.UndoNullMove();
+
+            if (score >= beta)
+            {
+                return beta;
+            }
+        }
+
+        // Internal Iterative Deepening - search to find good move ordering
+        // When we have no hash move at high depths, do a reduced depth search
+        // to populate the TT with a best move for better move ordering
+        if (m_difficulty > 6 && depth >= 6 && ttMove.GetFrom() == ttMove.GetTo())
+        {
+            int iidDepth = depth - 2;
+            AlphaBeta(board, iidDepth, alpha, beta, ply);
+            m_transpositionTable.Probe(zobristKey, 0, alpha, beta, ttScore, ttMove, ply);
+        }
 
         const int sideIndex = static_cast<int>(sideToMove);
 
@@ -823,6 +858,7 @@ namespace Chess
 
         bool sideInCheck = board.IsInCheck(sideToMove);
 
+        // Check extension - search deeper when in check to find escape sequences
         if (sideInCheck && ply < MAX_PLY - 1)
         {
             depth++;
@@ -840,10 +876,11 @@ namespace Chess
                            !move.IsCastling();
 
             // Late Move Pruning - skip late quiet moves at moderate depths
-            // Only apply when not at root and depth is high enough
+            // After searching many moves, remaining quiet moves are unlikely to improve score
+            // Only apply when not at root and depth is moderate
             if (ply > 0 &&
-                depth >= 4 && depth <= 6 &&
-                moveIndex >= (6 + depth * depth) &&
+                depth >= 3 && depth <= 7 &&
+                moveIndex >= (4 + depth * depth / 2) &&
                 !sideInCheck &&
                 isQuiet)
             {
@@ -862,16 +899,20 @@ namespace Chess
             bool givesCheck = board.IsInCheck(opponentColorAfterMove);
 
             // Late Move Reduction - reduce search depth for likely poor moves
+            // Moves ordered later are less likely to be good, so search them at reduced depth
             // Don't reduce moves that give check or other forcing moves
-            bool applyLMR = depth >= 4 &&
-                            moveIndex >= 6 &&
+            bool applyLMR = depth >= 3 &&
+                            moveIndex >= 4 &&
                             !sideInCheck &&
                             !givesCheck &&
                             isQuiet;
 
             if (applyLMR)
             {
-                score = -AlphaBeta(board, depth - 2, -beta, -alpha, ply + 1);
+                int lmrReduction = 1 + moveIndex / 8 + depth / 6;
+                if (lmrReduction >= depth) lmrReduction = depth - 1;
+
+                score = -AlphaBeta(board, depth - 1 - lmrReduction, -alpha - 1, -alpha, ply + 1);
 
                 if (score > alpha)
                 {
@@ -895,7 +936,7 @@ namespace Chess
             // Beta cutoff - this move is too good, opponent won't allow it
             if (score >= beta)
             {
-                // Update history and killer moves for quiet moves
+                // Update history and killer moves for quiet moves that cause cutoffs
                 if (isQuiet)
                 {
                     m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
@@ -905,6 +946,14 @@ namespace Chess
                     {
                         m_killerMoves[ply][1] = m_killerMoves[ply][0];
                         m_killerMoves[ply][0] = move;
+                    }
+
+                    // Store counter move - this move refuted opponent's last move
+                    if (board.GetHistoryPly() > 0)
+                    {
+                        const auto& lastRec = board.GetLastMoveRecord();
+                        int prevSide = 1 - sideIndex;
+                        m_counterMoves[prevSide][lastRec.move.GetFrom()][lastRec.move.GetTo()] = move;
                     }
                 }
                 m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
@@ -1057,8 +1106,7 @@ namespace Chess
 
         return alpha;
     }
-
-    // Worker thread alpha-beta search - uses thread-local heuristics to avoid data races
+	// Worker thread alpha-beta search - uses thread-local heuristics to avoid data races
     int AIPlayer::WorkerAlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
                                    ThreadLocalData& tld)
     {
@@ -1123,20 +1171,30 @@ namespace Chess
             return 0;
         }
 
-		// Null move pruning - disabled in endgames to avoid zugzwang errors
-		int phase = ComputePhase(board);
-		if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
-		{
-			const int R = 2;
-			board.MakeNullMoveUnchecked();
-			int score = -WorkerAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1, tld);
-			board.UndoNullMove();
+        // Null move pruning - disabled in endgames to avoid zugzwang errors
+        int phase = ComputePhase(board);
+        if (m_difficulty > 6 && depth >= 3 && phase > 64 && !board.IsInCheck(sideToMove))
+        {
+            int R = 3 + depth / 4;
+            if (R > depth - 1) R = depth - 1;
 
-			if (score >= beta)
-			{
-				return beta;
-			}
-		}
+            board.MakeNullMoveUnchecked();
+            int score = -WorkerAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1, tld);
+            board.UndoNullMove();
+
+            if (score >= beta)
+            {
+                return beta;
+            }
+        }
+
+        // Internal Iterative Deepening - search to find good move ordering
+        if (m_difficulty > 6 && depth >= 6 && ttMove.GetFrom() == ttMove.GetTo())
+        {
+            int iidDepth = depth - 2;
+            WorkerAlphaBeta(board, iidDepth, alpha, beta, ply, tld);
+            m_transpositionTable.Probe(zobristKey, 0, alpha, beta, ttScore, ttMove, ply);
+        }
 
         const int sideIndex = static_cast<int>(sideToMove);
 
@@ -1165,8 +1223,8 @@ namespace Chess
             // Late Move Pruning - skip late quiet moves at moderate depths
             // Only apply when not at root and depth is high enough
             if (ply > 0 &&
-                depth >= 4 && depth <= 6 &&
-                moveIndex >= (6 + depth * depth) &&
+                depth >= 3 && depth <= 7 &&
+                moveIndex >= (4 + depth * depth / 2) &&
                 !sideInCheck &&
                 isQuiet)
             {
@@ -1183,11 +1241,14 @@ namespace Chess
                 ? PlayerColor::Black : PlayerColor::White;
             bool givesCheck = board.IsInCheck(opponentColorAfterMove);
 
-            bool applyLMR = depth >= 4 && moveIndex >= 6 && !sideInCheck && !givesCheck && isQuiet;
+            bool applyLMR = depth >= 3 && moveIndex >= 4 && !sideInCheck && !givesCheck && isQuiet;
 
             if (applyLMR)
             {
-                score = -WorkerAlphaBeta(board, depth - 2, -beta, -alpha, ply + 1, tld);
+                int lmrReduction = 1 + moveIndex / 8 + depth / 6;
+                if (lmrReduction >= depth) lmrReduction = depth - 1;
+
+                score = -WorkerAlphaBeta(board, depth - 1 - lmrReduction, -alpha - 1, -alpha, ply + 1, tld);
                 if (score > alpha)
                 {
                     score = -WorkerAlphaBeta(board, depth - 1, -beta, -alpha, ply + 1, tld);
@@ -1217,6 +1278,13 @@ namespace Chess
                     {
                         tld.killerMoves[ply][1] = tld.killerMoves[ply][0];
                         tld.killerMoves[ply][0] = move;
+                    }
+
+                    if (board.GetHistoryPly() > 0)
+                    {
+                        const auto& lastRec = board.GetLastMoveRecord();
+                        int prevSide = 1 - sideIndex;
+                        m_counterMoves[prevSide][lastRec.move.GetFrom()][lastRec.move.GetTo()] = move;
                     }
                 }
                 m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
@@ -1400,9 +1468,22 @@ namespace Chess
             if (move == tld.killerMoves[ply][1]) return 700000;
         }
 
-        // Read from shared history table
+        // Counter move heuristic - check if this move refutes opponent's last move
         const Piece movingPiece = board.GetPieceAt(move.GetFrom());
         const int sideIndex = static_cast<int>(movingPiece.GetColor());
+
+        if (ply > 0 && board.GetHistoryPly() > 0)
+        {
+            const auto& lastRecord = board.GetLastMoveRecord();
+            int prevFrom = lastRecord.move.GetFrom();
+            int prevTo = lastRecord.move.GetTo();
+            int oppSide = 1 - sideIndex;
+            Move counterMove = m_counterMoves[oppSide][prevFrom][prevTo];
+            if (move == counterMove)
+                return 600000;
+        }
+
+        // Read from shared history table
         int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
 
         // Tactical bonus for central squares
@@ -1423,6 +1504,7 @@ namespace Chess
         return historyScore + centerBonus;
     }
 
+    // Simple move ordering without heuristics (used for basic sorting)
     void AIPlayer::OrderMovesSimple(MoveList& moves, const Board& board, Move ttMove)
     {
         std::vector<std::pair<int, Move>> scoredMoves;
@@ -1446,36 +1528,34 @@ namespace Chess
                 score = 1000000 + victimValue * 10 - aggressorValue;
 
                 // SEE-based adjustment
-                int seeValue = SEE(board, move);
-                if (seeValue < 0)
-                {
-                    score -= 100000;
-                }
-                else
-                {
-                    score += seeValue;
-                }
-            }
-            // Good priority: Promotions
-            else if (move.IsPromotion())
-            {
-                score = 900000;
-            }
+			int seeValue = SEE(board, move);
+			if (seeValue < 0)
+			{
+			score -= 100000;
+			}
+			else
+			{
+			score += seeValue;
+			}
+			}
+			// Good priority: Promotions
+			else if (move.IsPromotion())
+			{
+			score = 900000;
+			}
+					scoredMoves.push_back({score, move});
+				}
 
-            scoredMoves.push_back({score, move});
-        }
+				std::sort(scoredMoves.begin(), scoredMoves.end(),
+					[](const auto& a, const auto& b) { return a.first > b.first; });
 
-        std::sort(scoredMoves.begin(), scoredMoves.end(),
-            [](const auto& a, const auto& b) { return a.first > b.first; });
-
-        moves.clear();
-        for (const auto& [score, move] : scoredMoves)
-        {
-            moves.push_back(move);
-        }
-    }
-
-    // Static Exchange Evaluation - evaluate capture sequence on target square
+				moves.clear();
+				for (const auto& [score, move] : scoredMoves)
+				{
+					moves.push_back(move);
+				}
+			}
+			// Static Exchange Evaluation - evaluate capture sequence on target square
     int AIPlayer::SEE(const Board& board, const Move& move) const
     {
         if (!move.IsCapture() && !move.IsPromotion())
@@ -1584,7 +1664,7 @@ namespace Chess
         int file = square % 8;
         int rank = square / 8;
 
-        // Check for pawn attackers
+        // Check for pawn attackers (always return first found pawn)
         if (attackerColor == PlayerColor::White)
         {
             if (rank > 0)
@@ -1758,40 +1838,40 @@ namespace Chess
         NewGame(GameMode::HumanVsComputer);
     }
 
-	// Start a new game with specified mode
-	// humanPlaysWhite parameter determines who plays white in Human vs Computer mode
-	void ChessGame::NewGame(GameMode mode, bool humanPlaysWhite)
-	{
-		m_gameMode = mode;
-		m_board.ResetToStartingPosition();
-		m_selectedSquare = -1;
-		m_moveHistory.clear();
-		m_boardHistory.clear();
-		m_boardHistory.push_back(m_board);
-		m_currentHistoryIndex = 0;
-		
-		// Configure player AI status based on game mode
-		if (mode == GameMode::HumanVsHuman)
-		{
-			m_players[0].isAI = false;
-			m_players[1].isAI = false;
-		}
-		else if (mode == GameMode::HumanVsComputer)
-		{
-			// MODIFIED LOGIC: Support human playing either color
-			// If humanPlaysWhite = true  â†’ White=Human(false), Black=AI(true)
-			// If humanPlaysWhite = false â†’ White=AI(true), Black=Human(false)
-			
-			m_players[0].isAI = !humanPlaysWhite;  // White (Player 0)
-			m_players[1].isAI = humanPlaysWhite;   // Black (Player 1)
-			
-			// Set default difficulty for AI player (whichever one is AI)
-			int aiIndex = m_players[0].isAI ? 0 : 1;
-			if (m_players[aiIndex].aiDifficulty == 5)
-			{
-				m_players[aiIndex].aiDifficulty = 3;
-			}
-		}
+    // Start a new game with specified mode
+    // humanPlaysWhite parameter determines who plays white in Human vs Computer mode
+    void ChessGame::NewGame(GameMode mode, bool humanPlaysWhite)
+    {
+        m_gameMode = mode;
+        m_board.ResetToStartingPosition();
+        m_selectedSquare = -1;
+        m_moveHistory.clear();
+        m_boardHistory.clear();
+        m_boardHistory.push_back(m_board);
+        m_currentHistoryIndex = 0;
+        
+        // Configure player AI status based on game mode
+        if (mode == GameMode::HumanVsHuman)
+        {
+            m_players[0].isAI = false;
+            m_players[1].isAI = false;
+        }
+        else if (mode == GameMode::HumanVsComputer)
+        {
+            // Support human playing either color
+            // If humanPlaysWhite = true  -> White=Human(false), Black=AI(true)
+            // If humanPlaysWhite = false -> White=AI(true), Black=Human(false)
+            
+            m_players[0].isAI = !humanPlaysWhite;  // White (Player 0)
+            m_players[1].isAI = humanPlaysWhite;   // Black (Player 1)
+            
+            // Set default difficulty for AI player (whichever one is AI)
+            int aiIndex = m_players[0].isAI ? 0 : 1;
+            if (m_players[aiIndex].aiDifficulty == 5)
+            {
+                m_players[aiIndex].aiDifficulty = 3;
+            }
+        }
         else if (mode == GameMode::ComputerVsComputer)
         {
             m_players[0].isAI = true;
@@ -1912,7 +1992,8 @@ namespace Chess
         }
         return false;
     }
-	// Make move using Move object
+
+    // Make move using Move object
     bool ChessGame::MakeMove(const Move& move)
     {
         // Verify move is in legal moves list
@@ -1940,31 +2021,31 @@ namespace Chess
     }
 
     // Undo last move
-	bool ChessGame::UndoMove()
-	{
-		if (m_currentHistoryIndex == 0)
-		{
-			return false; // No moves to undo - at game start
-		}
+    bool ChessGame::UndoMove()
+    {
+        if (m_currentHistoryIndex == 0)
+        {
+            return false; // No moves to undo - at game start
+        }
 
-		// Check undo depth limit - count from current position backwards
-		size_t movesFromStart = m_currentHistoryIndex;
-		size_t movesFromLatest = m_boardHistory.size() - 1 - m_currentHistoryIndex;
-		
-		// Can only undo if we haven't already undone max depth moves
-		if (movesFromLatest >= static_cast<size_t>(m_maxUndoDepth))
-		{
-			return false; // Already undone max depth moves
-		}
+        // Check undo depth limit - count from current position backwards
+        size_t movesFromStart = m_currentHistoryIndex;
+        size_t movesFromLatest = m_boardHistory.size() - 1 - m_currentHistoryIndex;
+        
+        // Can only undo if we haven't already undone max depth moves
+        if (movesFromLatest >= static_cast<size_t>(m_maxUndoDepth))
+        {
+            return false; // Already undone max depth moves
+        }
 
-		m_currentHistoryIndex--;
-		m_board = m_boardHistory[m_currentHistoryIndex];
+        m_currentHistoryIndex--;
+        m_board = m_boardHistory[m_currentHistoryIndex];
 
-		UpdateLegalMoves();
-		UpdateHighlightedSquares();
+        UpdateLegalMoves();
+        UpdateHighlightedSquares();
 
-		return true;
-	}
+        return true;
+    }
 
     // Redo previously undone move
     bool ChessGame::RedoMove()
@@ -1976,8 +2057,6 @@ namespace Chess
         
         m_currentHistoryIndex++;
         m_board = m_boardHistory[m_currentHistoryIndex];
-        
-        // Note: Full implementation would need to rebuild move history for redo
         
         UpdateLegalMoves();
         UpdateHighlightedSquares();
@@ -2147,19 +2226,19 @@ namespace Chess
     }
 
     // Add move to history and save board state
-	void ChessGame::AddMoveToHistory(const Move& move)
-	{
-		// If we make a new move after undoing, remove the unnecessary branch of history
-		if (m_currentHistoryIndex < m_boardHistory.size() - 1)
-		{
-			m_moveHistory.erase(m_moveHistory.begin() + m_currentHistoryIndex, m_moveHistory.end());
-			m_boardHistory.erase(m_boardHistory.begin() + m_currentHistoryIndex + 1, m_boardHistory.end());
-		}
-		
-		m_moveHistory.push_back(move);
-		m_boardHistory.push_back(m_board);
-		m_currentHistoryIndex = m_boardHistory.size() - 1;
-	}
+    void ChessGame::AddMoveToHistory(const Move& move)
+    {
+        // If we make a new move after undoing, remove the unnecessary branch of history
+        if (m_currentHistoryIndex < m_boardHistory.size() - 1)
+        {
+            m_moveHistory.erase(m_moveHistory.begin() + m_currentHistoryIndex, m_moveHistory.end());
+            m_boardHistory.erase(m_boardHistory.begin() + m_currentHistoryIndex + 1, m_boardHistory.end());
+        }
+        
+        m_moveHistory.push_back(move);
+        m_boardHistory.push_back(m_board);
+        m_currentHistoryIndex = m_boardHistory.size() - 1;
+    }
 
     // Update PGN game record with current game state
     void ChessGame::UpdateGameRecord()
@@ -2310,25 +2389,25 @@ namespace Chess
     }
 
     // Parse PGN header line (placeholder)
-    bool PGNParser::ParseHeader(const std::string& /*line*/, GameRecord& /*record*/)
+    bool PGNParser::ParseHeader(const std::string&, GameRecord&)
     {
         return false;
     }
 
     // Parse move in Standard Algebraic Notation (placeholder)
-    bool PGNParser::ParseMove(const std::string& /*moveStr*/, Board& /*board*/, std::string& /*sanMove*/)
+    bool PGNParser::ParseMove(const std::string&, Board&, std::string&)
     {
         return false;
     }
 
     // Convert Move to Standard Algebraic Notation (placeholder)
-    std::string PGNParser::MoveToSAN(const Move& /*move*/, const Board& /*board*/)
+    std::string PGNParser::MoveToSAN(const Move&, const Board&)
     {
         return "";
     }
 
     // Convert Standard Algebraic Notation to Move (placeholder)
-    Move PGNParser::SANToMove(const std::string& /*san*/, const Board& /*board*/)
+    Move PGNParser::SANToMove(const std::string&, const Board&)
     {
         return Move();
     }

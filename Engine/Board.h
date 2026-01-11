@@ -92,10 +92,10 @@ namespace Chess
         
         Board();                            // Initialize to starting position
         explicit Board(const std::string& fen);  // Initialize from FEN string
-		
-		// Custom copy constructor and assignment operator
-		Board(const Board& other);
-		Board& operator=(const Board& other);
+        
+        // Custom copy constructor and assignment operator for deep copy
+        Board(const Board& other);
+        Board& operator=(const Board& other);
 
         // ========== ACCESSORS ==========
 
@@ -259,12 +259,35 @@ namespace Chess
         // Recompute Zobrist hash from scratch (for validation)
         void RecomputeZobristKey();
 
+        // Get current move history ply (number of moves made)
+        [[nodiscard]] constexpr int GetHistoryPly() const noexcept { return m_historyPly; }
+
+        // ========== MOVE RECORD STRUCTURE ==========
+        
+        // Complete move record for undo functionality
+        // Stores all state that can change during a move
+        struct MoveRecord
+        {
+            Move move;
+            Piece capturedPiece = EMPTY_PIECE;
+            Piece movedPiece = EMPTY_PIECE;
+            int previousEnPassant = -1;
+            std::array<bool, 4> previousCastlingRights = {true, true, true, true};
+            int previousHalfMoveClock = 0;
+            int previousKingSquares[2] = {-1, -1};
+            uint64_t previousZobristKey = 0;
+            int previousIncrementalScore = 0;
+        };
+
+        // Get last move record for analysis (e.g., move ordering heuristics)
+        [[nodiscard]] const MoveRecord& GetLastMoveRecord() const { return m_moveHistory[m_historyPly - 1]; }
+
     private:
         // FENParser and MoveGenerator need access to internal state
         friend class FENParser;
         friend class MoveGenerator;
 
-		// ========== INTERNAL HELPER METHODS ==========
+        // ========== INTERNAL HELPER METHODS ==========
 
         // Update king position tracking when king moves
         void UpdateKingSquare(PlayerColor color, int newSquare);
@@ -335,20 +358,6 @@ namespace Chess
         uint64_t m_allOccupied = 0;
 
         // Move history for undo functionality
-        struct MoveRecord
-        {
-            Move move;
-            Piece capturedPiece = EMPTY_PIECE;
-            Piece movedPiece = EMPTY_PIECE;
-            int previousEnPassant = -1;
-            std::array<bool, 4> previousCastlingRights = {true, true, true, true};
-            int previousHalfMoveClock = 0;
-            int previousKingSquares[2] = {-1, -1};
-            uint64_t previousZobristKey = 0;
-            int previousIncrementalScore = 0;
-        };
-
-        // Move history stack (512 moves should be sufficient)
         std::array<MoveRecord, 512> m_moveHistory;
         int m_historyPly = 0;
 

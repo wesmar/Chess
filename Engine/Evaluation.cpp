@@ -1,21 +1,3 @@
-// Evaluation.cpp
-// Position evaluation system for chess engine
-//
-// This module implements a sophisticated evaluation function that assesses chess positions
-// from the current side-to-move perspective. The evaluation combines multiple factors:
-//
-// 1. MATERIAL - base piece values (pawn=100, knight=320, bishop=330, etc.)
-// 2. PIECE-SQUARE TABLES (PST) - positional bonuses for piece placement
-// 3. KING SAFETY - pawn shield, castling status, open files near king
-// 4. MOBILITY - number of legal moves available for pieces
-// 5. PAWN STRUCTURE - doubled pawns, isolated pawns, pawn chains
-// 6. PASSED PAWNS - pawns with no opposing pawns blocking their path
-// 7. TACTICAL POSITIONING - central control, piece coordination
-// 8. GAME PHASE - interpolation between middlegame and endgame evaluation
-//
-// The evaluation uses tapered eval technique: blending middlegame and endgame scores
-// based on remaining material (phase). This ensures smooth transitions as pieces are traded.
-
 #include "Evaluation.h"
 #include "MoveGenerator.h"
 #include <array>
@@ -23,6 +5,16 @@
 
 namespace Chess
 {
+    // Calculate king distance using Chebyshev distance (chessboard distance)
+    // This is the minimum number of king moves needed to reach a square
+    // Equal to max(|file_diff|, |rank_diff|)
+    int KingDistance(int sq1, int sq2)
+    {
+        int file1 = sq1 % 8, rank1 = sq1 / 8;
+        int file2 = sq2 % 8, rank2 = sq2 / 8;
+        return std::max(std::abs(file1 - file2), std::abs(rank1 - rank2));
+    }
+
     // Piece-Square Tables (PST) - positional bonuses for piece placement
     // These tables encode chess principles: control center, develop pieces, king safety
     // Values are from White's perspective (rank 0 = White's back rank, rank 7 = Black's back rank)
@@ -187,53 +179,45 @@ namespace Chess
     {
         return IsSquareAttacked(board, square, color);
     }
-	
-	// Evaluate king safety with attack zone analysis
+
+    // Evaluate king safety for given color
     // King safety is critical in middlegame - unsafe king leads to tactical vulnerabilities
     //
-    // Improved evaluation considers:
-    // 1. PAWN SHIELD: Pawns protecting king (f2-g2-h2 for kingside castle)
-    // 2. ATTACK ZONE: 3x3 area around king with weighted attacker accumulation
-    // 3. OPEN FILES: Files near king without friendly pawns (allows rook attacks)
-    // 4. WEAK SQUARES: Squares near king that can be occupied by enemy pieces
-    //
-    // Attack zone scoring:
-    // - Queen attacking zone: 4 units
-    // - Rook attacking zone: 2.5 units
-    // - Bishop attacking zone: 2 units
-    // - Knight attacking zone: 2 units
-    // - Penalty table: 0 attackers=0, 1=0, 2=-40, 3=-90, 4+=-160
+    // Factors considered:
+    // - Castled position bonus (king on g1/c1 is safer than e1)
+    // - Pawn shield in front of king (f2-g2-h2 for kingside castle)
+    // - Advanced pawn shield penalty (pawns two ranks ahead may overextend)
+    // - Open files near king (allows rook attacks)
+    // - Attacking piece weight near king (enemy pieces targeting king area)
     //
     // Returns positive score for safe king, negative for exposed king
     int EvaluateKingSafety(const Board& board, PlayerColor color)
     {
         int kingSquare = board.GetKingSquare(color);
-        if (kingSquare == -1) return 0;
+        if (kingSquare == -1) return 0; // No king (shouldn't happen in valid position)
 
         int safety = 0;
         int file = kingSquare % 8;
         int rank = kingSquare / 8;
 
-        PlayerColor enemyColor = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
-
         // Castling position bonus
         // King on g-file (kingside castle) or c-file (queenside castle) is safer
         if (color == PlayerColor::White && rank == 0)
         {
-            if (file == 6 || file == 2)
+            if (file == 6 || file == 2) // g1 or c1
             {
-                safety += 30;
+                safety += 35;  // Increased bonus from 30 to 35
             }
         }
         else if (color == PlayerColor::Black && rank == 7)
         {
-            if (file == 6 || file == 2)
+            if (file == 6 || file == 2) // g8 or c8
             {
-                safety += 30;
+                safety += 35;  // Increased bonus from 30 to 35
             }
         }
 
-        // Pawn shield evaluation
+        // Pawn shield evaluation with advanced pawn consideration
         // Pawns one rank ahead of king provide protection from attacks
         int direction = (color == PlayerColor::White) ? 1 : -1;
         int shieldRank = rank + direction;
@@ -249,7 +233,22 @@ namespace Chess
                 // Friendly pawn in shield position is valuable protection
                 if (piece.IsType(PieceType::Pawn) && piece.IsColor(color))
                 {
-                    safety += 25;
+                    safety += 25;  // Increased from 20 to 25
+                    
+                    // Check for advanced pawn (two ranks ahead of king)
+                    // Advanced pawn shield may be less effective (overextended)
+                    int advancedRank = shieldRank + direction;
+                    if (advancedRank >= 0 && advancedRank < 8)
+                    {
+                        int advSq = advancedRank * 8 + f;
+                        Piece advPiece = board.GetPieceAt(advSq);
+                        if (advPiece.IsType(PieceType::Pawn) && advPiece.IsColor(color))
+                            safety -= 8;  // Small penalty for pawn being too far forward
+                    }
+                }
+                else
+                {
+                    safety -= 12;  // Penalty for missing pawn shield
                 }
             }
         }
@@ -270,223 +269,60 @@ namespace Chess
             }
             if (!hasPawn)
             {
-                safety -= 18;
+                safety -= 20; // Increased penalty from 15 to 20 for open file near king
             }
         }
 
-        // ATTACK ZONE EVALUATION (3x3 area around king)
-        // Count attackers with weighted values, then apply non-linear penalty
-        float attackUnits = 0.0f;
-
-        // Define king zone (3x3 area centered on king)
-        for (int df = -1; df <= 1; ++df)
+        // Enemy attacking pieces evaluation
+        // Count enemy pieces near king and weight them by piece type
+        PlayerColor enemy = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+        int attackers = 0;
+        int attackWeight = 0;
+        
+        // Weight factors for different piece types attacking king area
+        // Higher weight = more dangerous attacking piece
+        constexpr int PIECE_ATTACK_WEIGHT[] = {0, 0, 2, 2, 3, 5, 0}; // Pawn, Knight, Bishop, Rook, Queen, King
+        
+        const PieceList& enemyPieces = board.GetPieceList(enemy);
+        for (int i = 0; i < enemyPieces.count; ++i)
         {
-            for (int dr = -1; dr <= 1; ++dr)
+            int sq = enemyPieces.squares[i];
+            Piece p = board.GetPieceAt(sq);
+            PieceType type = p.GetType();
+            
+            // Skip pawns and king for this evaluation
+            if (type == PieceType::Pawn || type == PieceType::King) continue;
+            
+            int dist = KingDistance(sq, kingSquare);
+            if (dist <= 3)  // Only consider pieces within 3 squares of king
             {
-                int zoneFile = file + df;
-                int zoneRank = rank + dr;
-
-                if (zoneFile < 0 || zoneFile >= 8 || zoneRank < 0 || zoneRank >= 8)
-                    continue;
-
-                int zoneSq = zoneRank * 8 + zoneFile;
-
-                // Check if this square is attacked by enemy pieces
-                // We count attackers by piece type with different weights
-                
-                // Scan for enemy piece attackers
-				const PieceList& enemyPieces = board.GetPieceList(enemyColor);
-                for (int idx = 0; idx < enemyPieces.count; ++idx)
-                {
-                    int sq = enemyPieces.squares[idx];
-                    Piece piece = board.GetPieceAt(sq);
-
-                    PieceType type = piece.GetType();
-
-                    // Check if this enemy piece attacks the zone square
-                    bool attacks = false;
-
-                    if (type == PieceType::Pawn)
-                    {
-                        int pFile = sq % 8;
-                        int pRank = sq / 8;
-                        int pawnDir = (enemyColor == PlayerColor::White) ? 1 : -1;
-                        
-                        if (pRank + pawnDir == zoneRank && std::abs(pFile - zoneFile) == 1)
-                            attacks = true;
-                    }
-                    else if (type == PieceType::Knight)
-                    {
-                        int kFile = sq % 8;
-                        int kRank = sq / 8;
-                        int fileDiff = std::abs(kFile - zoneFile);
-                        int rankDiff = std::abs(kRank - zoneRank);
-                        
-                        if ((fileDiff == 2 && rankDiff == 1) || (fileDiff == 1 && rankDiff == 2))
-                            attacks = true;
-                    }
-                    else if (type == PieceType::Bishop || type == PieceType::Queen)
-                    {
-                        int bFile = sq % 8;
-                        int bRank = sq / 8;
-                        
-                        if (std::abs(bFile - zoneFile) == std::abs(bRank - zoneRank))
-                        {
-                            // Check diagonal path is clear
-                            int df2 = (zoneFile > bFile) ? 1 : -1;
-                            int dr2 = (zoneRank > bRank) ? 1 : -1;
-                            bool blocked = false;
-                            
-                            int f2 = bFile + df2;
-                            int r2 = bRank + dr2;
-                            while (f2 != zoneFile || r2 != zoneRank)
-                            {
-                                if (!board.GetPieceAt(f2, r2).IsEmpty())
-                                {
-                                    blocked = true;
-                                    break;
-                                }
-                                f2 += df2;
-                                r2 += dr2;
-                            }
-                            
-                            if (!blocked)
-                                attacks = true;
-                        }
-                    }
-                    
-                    if (type == PieceType::Rook || type == PieceType::Queen)
-                    {
-                        int rFile = sq % 8;
-                        int rRank = sq / 8;
-                        
-                        if (rFile == zoneFile || rRank == zoneRank)
-                        {
-                            // Check path is clear
-                            bool blocked = false;
-                            
-                            if (rFile == zoneFile)
-                            {
-                                int minR = std::min(rRank, zoneRank);
-                                int maxR = std::max(rRank, zoneRank);
-                                for (int r2 = minR + 1; r2 < maxR; ++r2)
-                                {
-                                    if (!board.GetPieceAt(rFile, r2).IsEmpty())
-                                    {
-                                        blocked = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                int minF = std::min(rFile, zoneFile);
-                                int maxF = std::max(rFile, zoneFile);
-                                for (int f2 = minF + 1; f2 < maxF; ++f2)
-                                {
-                                    if (!board.GetPieceAt(f2, rRank).IsEmpty())
-                                    {
-                                        blocked = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            if (!blocked)
-                                attacks = true;
-                        }
-                    }
-
-                    // Add attack weight based on piece type
-                    if (attacks)
-                    {
-                        switch (type)
-                        {
-                            case PieceType::Queen:  attackUnits += 4.0f; break;
-                            case PieceType::Rook:   attackUnits += 2.5f; break;
-                            case PieceType::Bishop: attackUnits += 2.0f; break;
-                            case PieceType::Knight: attackUnits += 2.0f; break;
-                            case PieceType::Pawn:   attackUnits += 1.0f; break;
-                            default: break;
-                        }
-                    }
-                }
+                attackers++;
+                attackWeight += PIECE_ATTACK_WEIGHT[static_cast<int>(type)] * (4 - dist);
             }
         }
-
-        // Apply non-linear penalty based on attack units
-        // More attackers = exponentially worse
-        int attackPenalty = 0;
-        if (attackUnits >= 12.0f)
-            attackPenalty = -200;  // Overwhelming attack
-        else if (attackUnits >= 9.0f)
-            attackPenalty = -160;  // Severe attack
-        else if (attackUnits >= 6.0f)
-            attackPenalty = -110;  // Dangerous attack
-        else if (attackUnits >= 4.0f)
-            attackPenalty = -60;   // Moderate pressure
-        else if (attackUnits >= 2.0f)
-            attackPenalty = -25;   // Light pressure
-
-        safety += attackPenalty;
+        
+        // Apply penalty for multiple attackers near king
+        if (attackers >= 2)
+        {
+            safety -= attackWeight * attackers / 2;
+        }
 
         return safety;
     }
 
-	// Evaluate piece mobility with non-linear scaling
-    // Mobility = number of squares a piece can move to
-    // Uses diminishing returns: first few moves worth more than later moves
+    // Evaluate piece mobility (number of squares pieces can move to)
+    // Higher mobility = better position, more tactical options
     //
-    // Scaling applied per piece:
-    // - Moves 1-4: 5 points each (critical mobility)
-    // - Moves 5-8: 3 points each (good mobility)
-    // - Moves 9-12: 2 points each (excellent mobility)
-    // - Moves 13+: 1 point each (marginal benefit)
+    // Only evaluates Bishop, Rook, and Queen mobility (most important sliding pieces)
+    // Knights and pawns have more predictable mobility patterns
     //
-    // This reflects chess reality: difference between 2 and 5 moves is huge,
-    // but difference between 15 and 18 moves is minimal
-    //
-    // Fast mobility evaluation using bitboard occupancy
-    // Counts empty squares accessible by sliding pieces without expensive move simulation
-    // Uses bitwise operations instead of loops for 10-30x speedup
+    // This is a simplified mobility evaluation - doesn't distinguish between
+    // attacking moves and quiet moves, but still provides valuable positional info
     int EvaluateMobility(const Board& board)
     {
         uint64_t occupied = board.GetAllOccupied();
         int whiteMobility = 0;
         int blackMobility = 0;
-
-        // Non-linear mobility scaling lookup table
-        // Index = number of moves, Value = centipawn score
-        constexpr int MOBILITY_SCALE[28] = {
-            0,   // 0 moves
-            5,   // 1 move
-            10,  // 2 moves
-            15,  // 3 moves
-            20,  // 4 moves (5 points each for first 4)
-            23,  // 5 moves (3 points for move 5)
-            26,  // 6 moves
-            29,  // 7 moves
-            32,  // 8 moves
-            34,  // 9 moves (2 points for move 9)
-            36,  // 10 moves
-            38,  // 11 moves
-            40,  // 12 moves
-            41,  // 13 moves (1 point per move from here)
-            42,  // 14 moves
-            43,  // 15 moves
-            44,  // 16 moves
-            45,  // 17 moves
-            46,  // 18 moves
-            47,  // 19 moves
-            48,  // 20 moves
-            49,  // 21 moves
-            50,  // 22 moves
-            51,  // 23 moves
-            52,  // 24 moves
-            53,  // 25 moves
-            54,  // 26 moves
-            55   // 27+ moves (cap at 27)
-        };
 
         constexpr std::array<std::pair<int, int>, 4> BISHOP_DIRECTIONS = {{
             {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
@@ -609,44 +445,17 @@ namespace Chess
                         }
                     }
                 }
-                else if (type == PieceType::Knight)
-                {
-                    // Knight mobility evaluation (simple count with scaling)
-                    constexpr std::array<std::pair<int, int>, 8> KNIGHT_OFFSETS = {{
-                        {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
-                        {-2, -1}, {-1, -2}, {1, -2}, {2, -1}
-                    }};
-
-                    for (const auto& [df, dr] : KNIGHT_OFFSETS)
-                    {
-                        int f = file + df;
-                        int r = rank + dr;
-
-                        if (f >= 0 && f < 8 && r >= 0 && r < 8)
-                        {
-                            int targetSq = r * 8 + f;
-                            Piece target = board.GetPieceAt(targetSq);
-
-                            if (target.IsEmpty() || target.IsOppositeColor(piece))
-                                mobility++;
-                        }
-                    }
-                }
-
-                // Apply non-linear scaling
-                int scaledMobility = MOBILITY_SCALE[std::min(mobility, 27)];
 
                 if (color == PlayerColor::White)
-                    whiteMobility += scaledMobility;
+                    whiteMobility += mobility;
                 else
-                    blackMobility += scaledMobility;
+                    blackMobility += mobility;
             }
         }
 
         return (whiteMobility - blackMobility);
     }
-
-    // Compute game phase (0 = endgame, 256 = opening)
+	    // Compute game phase (0 = endgame, 256 = opening)
     // Game phase determines how much weight to give middlegame vs endgame evaluation
     //
     // Phase calculation based on material:
@@ -798,310 +607,7 @@ namespace Chess
         return true; // No blocking pawns found
     }
 
-	// Check if square qualifies as outpost for given color
-    // Outpost criteria:
-    // 1. Square is on advanced rank (4th-6th for White, 3rd-5th for Black)
-    // 2. No enemy pawns can attack this square (now or in future)
-    // 3. Square is in central or near-central files (c-f files preferred)
-    //
-    // Outposts are valuable because pieces placed there are stable and hard to dislodge
-    // Knights particularly benefit from outposts (control key squares without pawn threats)
-    bool IsOutpostSquare(const Board& board, int square, PlayerColor color)
-    {
-        int file = square % 8;
-        int rank = square / 8;
-
-        // Define outpost ranks based on color
-        int minRank, maxRank;
-        if (color == PlayerColor::White)
-        {
-            minRank = 3;  // 4th rank (index 3)
-            maxRank = 5;  // 6th rank (index 5)
-        }
-        else
-        {
-            minRank = 2;  // 3rd rank from black's perspective
-            maxRank = 4;  // 5th rank from black's perspective
-        }
-
-        // Check if square is in outpost rank range
-        if (rank < minRank || rank > maxRank)
-            return false;
-
-		// Check if enemy pawns can attack this square
-        PlayerColor enemyColor = (color == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
-
-        // Check if enemy pawns can attack this square now or in the future
-        // We scan adjacent files from the square towards enemy's starting rank
-        // If any enemy pawn is found, it could potentially advance and attack
-        int enemyStartRank = (enemyColor == PlayerColor::White) ? 1 : 6;
-        int scanDirection = (enemyColor == PlayerColor::White) ? -1 : 1;
-        int scanStart = rank - scanDirection;
-
-        // Check left adjacent file
-        if (file > 0)
-        {
-            for (int r = scanStart; r >= 0 && r < 8; r -= scanDirection)
-            {
-                Piece p = board.GetPieceAt(file - 1, r);
-                if (p.IsType(PieceType::Pawn) && p.IsColor(enemyColor))
-                    return false;
-            }
-        }
-
-        // Check right adjacent file
-        if (file < 7)
-        {
-            for (int r = scanStart; r >= 0 && r < 8; r -= scanDirection)
-            {
-                Piece p = board.GetPieceAt(file + 1, r);
-                if (p.IsType(PieceType::Pawn) && p.IsColor(enemyColor))
-                    return false;
-            }
-        }
-
-        return true;  // No enemy pawns can attack this square
-	}
-	
-    // Evaluate outpost bonuses for knights and bishops
-    // Outposts provide stable placement for minor pieces without pawn threats
-    //
-    // Bonus structure:
-    // - Knight on outpost: +25-40 cp (knights excel on outposts)
-    // - Bishop on outpost: +15-25 cp (bishops less dependent on outposts)
-    // - Extra bonus if outpost is defended by friendly pawn: +10 cp
-    // - Central outposts (d4/e4/d5/e5) worth more than flank outposts
-    //
-    // Returns score from white's perspective (positive = white advantage)
-    int EvaluateOutposts(const Board& board)
-    {
-        int score = 0;
-
-        for (int colorIdx = 0; colorIdx < 2; ++colorIdx)
-        {
-            PlayerColor color = static_cast<PlayerColor>(colorIdx);
-            const PieceList& list = board.GetPieceList(color);
-
-            for (int i = 0; i < list.count; ++i)
-            {
-                int sq = list.squares[i];
-                Piece piece = board.GetPieceAt(sq);
-
-                if (piece.IsEmpty()) continue;
-
-                PieceType type = piece.GetType();
-                
-                // Only evaluate knights and bishops for outposts
-                if (type != PieceType::Knight && type != PieceType::Bishop)
-                    continue;
-
-                // Check if piece is on outpost square
-                if (!IsOutpostSquare(board, sq, color))
-                    continue;
-
-                int file = sq % 8;
-                int rank = sq / 8;
-                
-                // Base outpost bonus
-                int bonus = 0;
-                if (type == PieceType::Knight)
-                {
-                    // Knights benefit most from outposts
-                    bonus = 30;
-                    
-                    // Central outposts are more valuable
-                    if (file >= 2 && file <= 5)  // c-f files
-                        bonus += 10;
-                }
-                else  // Bishop
-                {
-                    // Bishops get smaller outpost bonus
-                    bonus = 18;
-                    
-                    // Central outposts
-                    if (file >= 2 && file <= 5)
-                        bonus += 7;
-                }
-
-                // Check if outpost is defended by friendly pawn
-                // Pawn-defended outposts are much more stable
-                int pawnDefenseRank = (color == PlayerColor::White) ? rank - 1 : rank + 1;
-                if (pawnDefenseRank >= 0 && pawnDefenseRank < 8)
-                {
-                    // Check diagonal pawns that can defend this square
-                    if (file > 0)
-                    {
-                        Piece leftPawn = board.GetPieceAt(file - 1, pawnDefenseRank);
-                        if (leftPawn.IsType(PieceType::Pawn) && leftPawn.IsColor(color))
-                        {
-                            bonus += 12;  // Pawn-defended outpost bonus
-                        }
-                    }
-                    if (file < 7)
-                    {
-                        Piece rightPawn = board.GetPieceAt(file + 1, pawnDefenseRank);
-                        if (rightPawn.IsType(PieceType::Pawn) && rightPawn.IsColor(color))
-                        {
-                            bonus += 12;
-                        }
-                    }
-                }
-
-                // Apply bonus to score
-                if (color == PlayerColor::White)
-                    score += bonus;
-                else
-                    score -= bonus;
-            }
-        }
-
-        return score;
-    }
-	
-	// Evaluate rook placement on open and semi-open files
-    // Rooks maximize their effectiveness on files without pawn obstructions
-    //
-    // File types:
-    // 1. OPEN FILE: No pawns of either color
-    //    - Rook bonus: +25 cp
-    //    - Connected rooks on same open file: +15 cp extra
-    // 2. SEMI-OPEN FILE: No friendly pawns, but enemy pawns present
-    //    - Rook bonus: +15 cp
-    //    - Pressure on enemy pawns
-    // 3. CLOSED FILE: Friendly pawns present
-    //    - No bonus (rook less effective)
-    //
-    // Special cases:
-    // - Rook on 7th/2nd rank (attacking enemy pawns): +30 cp
-    // - Both rooks on 7th/2nd rank: +20 cp extra (devastating)
-    //
-    // Returns score from white's perspective (positive = white advantage)
-    int EvaluateRookFiles(const Board& board)
-    {
-        int score = 0;
-
-        // Track rooks on 7th/2nd rank for special bonus
-        int whiteRooksOn7th = 0;
-        int blackRooksOn2nd = 0;
-
-        for (int colorIdx = 0; colorIdx < 2; ++colorIdx)
-        {
-            PlayerColor color = static_cast<PlayerColor>(colorIdx);
-            const PieceList& list = board.GetPieceList(color);
-
-            // Track which files have rooks for connected rook detection
-            std::array<int, 8> rooksOnFile = {0};
-
-            for (int i = 0; i < list.count; ++i)
-            {
-                int sq = list.squares[i];
-                Piece piece = board.GetPieceAt(sq);
-
-                if (!piece.IsType(PieceType::Rook))
-                    continue;
-
-                int file = sq % 8;
-                int rank = sq / 8;
-
-                rooksOnFile[file]++;
-
-                // Check file type for this rook
-                bool hasFriendlyPawn = false;
-                bool hasEnemyPawn = false;
-
-                for (int r = 0; r < 8; ++r)
-                {
-                    Piece p = board.GetPieceAt(file, r);
-                    if (p.IsType(PieceType::Pawn))
-                    {
-                        if (p.IsColor(color))
-                            hasFriendlyPawn = true;
-                        else
-                            hasEnemyPawn = true;
-                    }
-                }
-
-                int bonus = 0;
-
-                if (!hasFriendlyPawn && !hasEnemyPawn)
-                {
-                    // Open file (no pawns at all)
-                    bonus = 25;
-                }
-                else if (!hasFriendlyPawn && hasEnemyPawn)
-                {
-                    // Semi-open file (only enemy pawns)
-                    bonus = 15;
-                }
-
-                // Special bonus for rook on 7th rank (White) or 2nd rank (Black)
-                // These rooks attack enemy pawns and restrict king
-                if (color == PlayerColor::White && rank == 6)
-                {
-                    bonus += 30;
-                    whiteRooksOn7th++;
-                }
-                else if (color == PlayerColor::Black && rank == 1)
-                {
-                    bonus += 30;
-                    blackRooksOn2nd++;
-                }
-
-                if (color == PlayerColor::White)
-                    score += bonus;
-                else
-                    score -= bonus;
-            }
-
-            // Connected rooks bonus (both rooks on same open/semi-open file)
-            for (int f = 0; f < 8; ++f)
-            {
-                if (rooksOnFile[f] >= 2)
-                {
-                    // Check if this file is open or semi-open
-                    bool hasFriendlyPawn = false;
-                    for (int r = 0; r < 8; ++r)
-                    {
-                        Piece p = board.GetPieceAt(f, r);
-                        if (p.IsType(PieceType::Pawn) && p.IsColor(color))
-                        {
-                            hasFriendlyPawn = true;
-                            break;
-                        }
-                    }
-
-                    if (!hasFriendlyPawn)
-                    {
-                        int connectedBonus = 15;
-                        if (color == PlayerColor::White)
-                            score += connectedBonus;
-                        else
-                            score -= connectedBonus;
-                    }
-                }
-            }
-        }
-
-        // Both rooks on 7th/2nd rank is devastating
-        if (whiteRooksOn7th >= 2)
-            score += 25;
-        if (blackRooksOn2nd >= 2)
-            score -= 25;
-
-        return score;
-    }
-
-    // Calculate king distance using Chebyshev distance (chessboard distance)
-    // This is the minimum number of king moves needed to reach a square
-    // Equal to max(|file_diff|, |rank_diff|)
-    int KingDistance(int sq1, int sq2)
-    {
-        int file1 = sq1 % 8, rank1 = sq1 / 8;
-        int file2 = sq2 % 8, rank2 = sq2 / 8;
-        return std::max(std::abs(file1 - file2), std::abs(rank1 - rank2));
-    }
-	
-	// Evaluate passed pawns with endgame considerations
+    // Evaluate passed pawns with endgame considerations
     // Passed pawns are extremely valuable in endgames
     //
     // This function considers several endgame factors:
@@ -1200,16 +706,155 @@ namespace Chess
         }
     }
 
-    // Evaluate tactical positioning (central control)
-    // Control of center squares (d4, e4, d5, e5) is fundamental chess principle
-    // Extended center (c3-c6, f3-f6) also has value
-    //
-    // Knights and bishops benefit most from central positions
-    // Center control allows:
-    // - More mobility and flexibility
-    // - Better piece coordination
-    // - Control of key squares
-    // - Support for both flanks
+    // Check if square is an outpost for minor pieces (knights/bishops)
+    // An outpost is a square protected by pawn that cannot be attacked by enemy pawns
+    // Outposts are valuable positions for knights especially
+    bool IsOutpostSquare(const Board& board, int sq, PlayerColor color)
+    {
+        int file = sq % 8;
+        int rank = sq / 8;
+
+        // Check adjacent files for enemy pawns that could attack the outpost
+        for (int f = std::max(0, file - 1); f <= std::min(7, file + 1); ++f)
+        {
+            if (f == file) continue;
+
+            if (color == PlayerColor::White)
+            {
+                // For white, check if any enemy pawns on this file at or above the square
+                for (int r = rank; r <= 7; ++r)
+                {
+                    Piece p = board.GetPieceAt(f, r);
+                    if (p.IsType(PieceType::Pawn) && !p.IsColor(color))
+                        return false;
+                }
+            }
+            else
+            {
+                // For black, check if any enemy pawns on this file at or below the square
+                for (int r = rank; r >= 0; --r)
+                {
+                    Piece p = board.GetPieceAt(f, r);
+                    if (p.IsType(PieceType::Pawn) && !p.IsColor(color))
+                        return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // Evaluate rook placement and activity
+    // Rooks are most effective on:
+    // - Open files (no pawns of either color)
+    // - Semi-open files (no friendly pawns but enemy pawns)
+    // - 7th rank (attacking enemy pawns)
+    // - Connected rooks (rooks protecting each other on same rank)
+    int EvaluateRooks(const Board& board)
+    {
+        int score = 0;
+        
+        // Count pawns per file for both colors
+        std::array<int, 8> whitePawnFiles = {0};
+        std::array<int, 8> blackPawnFiles = {0};
+        
+        for (int sq = 0; sq < 64; ++sq)
+        {
+            Piece p = board.GetPieceAt(sq);
+            if (p.IsType(PieceType::Pawn))
+            {
+                int file = sq % 8;
+                if (p.IsColor(PlayerColor::White))
+                    whitePawnFiles[file]++;
+                else
+                    blackPawnFiles[file]++;
+            }
+        }
+
+        for (int colorIdx = 0; colorIdx < 2; ++colorIdx)
+        {
+            PlayerColor color = static_cast<PlayerColor>(colorIdx);
+            const PieceList& list = board.GetPieceList(color);
+            
+            int rookCount = 0;
+            int rookFiles[2] = {-1, -1};
+            
+            for (int i = 0; i < list.count; ++i)
+            {
+                int sq = list.squares[i];
+                Piece piece = board.GetPieceAt(sq);
+                if (!piece.IsType(PieceType::Rook)) continue;
+                
+                int file = sq % 8;
+                int rank = sq / 8;
+                
+                // Determine if file is open, semi-open, or closed
+                bool ownPawns = (color == PlayerColor::White) ? whitePawnFiles[file] > 0 : blackPawnFiles[file] > 0;
+                bool enemyPawns = (color == PlayerColor::White) ? blackPawnFiles[file] > 0 : whitePawnFiles[file] > 0;
+                
+                int bonus = 0;
+                if (!ownPawns && !enemyPawns)
+                    bonus = 25;  // Open file - best for rooks
+                else if (!ownPawns)
+                    bonus = 15;   // Semi-open file - good for rooks
+                
+                // 7th rank bonus (attacking enemy's back rank)
+                int seventhRank = (color == PlayerColor::White) ? 6 : 1;
+                if (rank == seventhRank)
+                    bonus += 20;
+                
+                if (color == PlayerColor::White)
+                    score += bonus;
+                else
+                    score -= bonus;
+                
+                // Track rook positions for connected rook evaluation
+                if (rookCount < 2)
+                    rookFiles[rookCount++] = file;
+            }
+            
+            // Connected rooks bonus (rooks on same rank with no pieces between)
+            if (rookCount == 2)
+            {
+                int f1 = rookFiles[0], f2 = rookFiles[1];
+                if (f1 > f2) std::swap(f1, f2);
+                
+                bool connected = true;
+                for (int f = f1 + 1; f < f2; ++f)
+                {
+                    int rank = board.GetKingSquare(color) / 8;
+                    for (int r = 0; r < 8; ++r)
+                    {
+                        Piece p = board.GetPieceAt(f, r);
+                        if (!p.IsEmpty() && p.IsColor(color))
+                        {
+                            connected = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (connected)
+                {
+                    if (color == PlayerColor::White)
+                        score += 15;
+                    else
+                        score -= 15;
+                }
+            }
+        }
+        
+        return score;
+    }
+
+    // Evaluate tactical positioning (central control, outposts, piece tropism)
+    // Extended evaluation beyond simple center control
+    // 
+    // Factors considered:
+    // - Center control bonuses for knights and bishops
+    // - Knight/bishop outposts (protected squares in enemy territory)
+    // - Piece tropism (distance to enemy king)
+    // - Pawn support for outpost pieces
     int EvaluateTacticalPosition(const Board& board)
     {
         int score = 0;
@@ -1227,7 +872,9 @@ namespace Chess
             0,  0,  0,  0,  0,  0,  0,  0
         };
 
-        // Evaluate piece placement for both colors
+        int whiteKingSq = board.GetKingSquare(PlayerColor::White);
+        int blackKingSq = board.GetKingSquare(PlayerColor::Black);
+
         for (int colorIdx = 0; colorIdx < 2; ++colorIdx)
         {
             PlayerColor color = static_cast<PlayerColor>(colorIdx);
@@ -1237,17 +884,49 @@ namespace Chess
             {
                 int sq = list.squares[i];
                 Piece piece = board.GetPieceAt(sq);
-
                 if (piece.IsEmpty()) continue;
 
                 PieceType type = piece.GetType();
                 
-                // Only knights and bishops get central control bonus
+                // Only knights and bishops get detailed tactical evaluation
                 // Rooks and queens prefer open files/diagonals over pure center control
                 // Pawns get central bonus from PST already
                 if (type == PieceType::Knight || type == PieceType::Bishop)
                 {
                     int bonus = CENTER_CONTROL_BONUS[sq];
+                    
+                    // Additional knight outpost evaluation
+                    if (type == PieceType::Knight)
+                    {
+                        int rank = sq / 8;
+                        bool inEnemyTerritory = (color == PlayerColor::White) ? rank >= 4 : rank <= 3;
+                        
+                        // Bonus for knights on outpost squares in enemy territory
+                        if (inEnemyTerritory && IsOutpostSquare(board, sq, color))
+                        {
+                            bonus += 25;
+                            
+                            // Extra bonus if outpost is supported by friendly pawn
+                            int file = sq % 8;
+                            int behindRank = (color == PlayerColor::White) ? rank - 1 : rank + 1;
+                            if (behindRank >= 0 && behindRank < 8)
+                            {
+                                Piece supporter = board.GetPieceAt(file, behindRank);
+                                if (supporter.IsType(PieceType::Pawn) && supporter.IsColor(color))
+                                    bonus += 15;
+                            }
+                        }
+                    }
+                    
+                    // Piece tropism - bonus for pieces near enemy king
+                    int enemyKingSq = (color == PlayerColor::White) ? blackKingSq : whiteKingSq;
+                    if (enemyKingSq >= 0)
+                    {
+                        int dist = KingDistance(sq, enemyKingSq);
+                        int tropism = (7 - dist) * 3;  // Closer to enemy king = higher bonus
+                        bonus += tropism;
+                    }
+
                     if (color == PlayerColor::White)
                         score += bonus;
                     else
@@ -1259,23 +938,22 @@ namespace Chess
         return score;
     }
 
-	// Main evaluation function - combines all evaluation components
+    // Main evaluation function - combines all evaluation components
     // Returns score from side-to-move perspective (positive = good for side to move)
     //
     // Evaluation components:
     // 1. Material + PST (incrementally maintained in Board class)
-    // 2. King safety (attack zones, pawn shield, open files)
-    // 3. Mobility (non-linear scaling with diminishing returns)
+    // 2. King safety (middlegame only)
+    // 3. Mobility (piece activity)
     // 4. Pawn structure (doubled, isolated pawns)
     // 5. Passed pawns (with endgame bonuses)
-    // 6. Outposts (knights and bishops on strong squares)
-    // 7. Rook files (open and semi-open file bonuses)
-    // 8. Tactical positioning (central control)
+    // 6. Tactical positioning (central control, outposts, tropism)
+    // 7. Rook placement (open files, 7th rank, connected rooks)
+    // 8. Bishop pair bonus
     // 9. Tempo bonus (side to move advantage)
     //
     // Uses tapered eval: mg_score * phase + eg_score * (256-phase) / 256
     // This smoothly transitions between middlegame and endgame evaluation
-	
     int Evaluate(const Board& board)
     {
         // Start with incrementally maintained material+PST score
@@ -1318,22 +996,18 @@ namespace Chess
 
                 int egPieceScore = value + egPST;
 
-				// Penalize exposed queen in middlegame
+                // Penalize exposed queen in middlegame
                 // Queen on attacked square is vulnerable to tactics
-                // Undefended queen under attack is much more serious
                 if (type == PieceType::Queen)
                 {
                     PlayerColor enemyColor = (color == PlayerColor::White) ?
                         PlayerColor::Black : PlayerColor::White;
                     if (IsSquareAttacked(board, sq, enemyColor))
                     {
-                        bool defended = IsDefended(board, sq, color);
-                        int penalty = defended ? 35 : 110;
-                        
                         if (color == PlayerColor::White)
-                            mgScore -= penalty;
+                            mgScore -= 150;  // Queen under attack penalty
                         else
-                            mgScore += penalty;
+                            mgScore += 150;
                     }
                 }
 
@@ -1372,10 +1046,10 @@ namespace Chess
                          EvaluateKingSafety(board, PlayerColor::Black);
         mgScore += kingSafety;
 
-        // Mobility evaluation (bitboard-accelerated)
+        // Mobility evaluation
         int mobility = EvaluateMobility(board);
         mgScore += mobility;
-        egScore += mobility / 2;
+        egScore += mobility / 2;  // Mobility less important in endgame
 
         // Pawn structure evaluation
         int pawnStructure = EvaluatePawnStructure(board, PlayerColor::White) -
@@ -1385,27 +1059,22 @@ namespace Chess
 
         // Passed pawns evaluation (critical in endgame)
         EvaluatePassedPawns(board, mgScore, egScore);
-		
-        // Outpost evaluation (knights and bishops on strong squares)
-        int outpostScore = EvaluateOutposts(board);
-        mgScore += outpostScore;
-        egScore += outpostScore / 2;  // Less critical in endgame
-		
-        // Rook file evaluation (open and semi-open files)
-        int rookFileScore = EvaluateRookFiles(board);
-        mgScore += rookFileScore;
-        egScore += rookFileScore / 2;
 
-        // Tactical positioning (central control)
+        // Tactical positioning (central control, outposts, tropism)
         int tacticalScore = EvaluateTacticalPosition(board);
         mgScore += tacticalScore;
         egScore += tacticalScore / 2;  // Less important in endgame
 
+        // Rook placement evaluation
+        int rookScore = EvaluateRooks(board);
+        mgScore += rookScore;
+        egScore += rookScore;
+
         // Tempo bonus - side to move has slight advantage
         // Having the initiative is valuable (can make threats, improve position)
-        int tempo = (board.GetSideToMove() == PlayerColor::White) ? 10 : -10;
+        int tempo = (board.GetSideToMove() == PlayerColor::White) ? 12 : -12;  // Increased from 10 to 12
         mgScore += tempo;
-        egScore += tempo;
+        egScore += tempo / 2;  // Tempo less important in endgame
 
         // Tapered evaluation: interpolate between middlegame and endgame scores
         // Formula: (mgScore * phase + egScore * (256 - phase)) / 256
