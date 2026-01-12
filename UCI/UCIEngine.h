@@ -21,6 +21,11 @@
 // - stop         : Abort current search and output best move
 // - setoption    : Configure engine parameters
 // - quit         : Exit the engine process
+//
+// Enhanced Features:
+// - INI-based configuration: Reads settings.ini from executable directory
+// - Neural network support: Optional NNUE evaluation integration
+// - Thread configuration: Customizable parallel search depth
 
 #pragma once
 
@@ -39,6 +44,7 @@
 #include <mutex>
 #include <optional>
 #include <algorithm>
+#include <windows.h>
 
 namespace Chess
 {
@@ -46,10 +52,18 @@ namespace Chess
     {
     public:
         UCIEngine()
-            : m_ai(5) // Default difficulty level 5
+            : m_ai(5)  // Default difficulty level 5
         {
             // Initialize board to standard starting position
             m_board.ResetToStartingPosition();
+            
+            // Load engine configuration from settings.ini file
+            // This allows persistent settings without GUI support
+            LoadSettingsFromINI();
+            
+            // Apply loaded settings to AI engine
+            // Configures threads, difficulty, and neural evaluation mode
+            InitializeAIFromSettings();
         }
 
         ~UCIEngine()
@@ -89,7 +103,9 @@ namespace Chess
         std::thread m_searchThread;
 
         // Engine configuration
-        int m_level = 5;
+        int m_level = 5;           // AI difficulty level (1-10)
+        int m_numThreads = 4;      // Number of parallel search threads
+        bool m_useNeuralEval = false;  // Enable NNUE evaluation
 
         // ---------- Command Dispatcher ----------
         // Routes incoming UCI commands to appropriate handlers
@@ -114,6 +130,11 @@ namespace Chess
                 StopSearchAndJoin();
                 std::lock_guard<std::mutex> lock(m_boardMutex);
                 m_board.ResetToStartingPosition();
+                
+                // Reload settings for new game
+                // This allows configuration changes between games
+                LoadSettingsFromINI();
+                InitializeAIFromSettings();
             }
             else if (cmd == "position")
             {
@@ -142,6 +163,71 @@ namespace Chess
             // These are either not applicable or not implemented
         }
 
+        // ---------- INI Configuration Loading ----------
+        // Reads engine settings from settings.ini in executable directory
+        // Allows persistent configuration across sessions
+        void LoadSettingsFromINI()
+        {
+            // Get executable path to locate settings.ini
+            wchar_t exePath[MAX_PATH];
+            GetModuleFileName(nullptr, exePath, MAX_PATH);
+            
+            // Extract directory from full path
+            std::wstring exeDir = exePath;
+            size_t pos = exeDir.find_last_of(L"\\/");
+            if (pos != std::wstring::npos)
+                exeDir = exeDir.substr(0, pos + 1);
+            
+            std::wstring iniPath = exeDir + L"settings.ini";
+
+            // Read AI difficulty level (1-10)
+            m_level = GetPrivateProfileInt(L"Game", L"AIDifficulty", 5, iniPath.c_str());
+            if (m_level < 1) m_level = 1;
+            if (m_level > 10) m_level = 10;
+
+            // Read thread count (default to hardware concurrency)
+            m_numThreads = GetPrivateProfileInt(L"Game", L"Threads",
+                std::thread::hardware_concurrency(), iniPath.c_str());
+            if (m_numThreads < 1) m_numThreads = 1;
+            if (m_numThreads > 64) m_numThreads = 64;
+
+            // Read neural evaluation preference
+            m_useNeuralEval = GetPrivateProfileInt(L"Game", L"UseNeuralEval", 0, iniPath.c_str()) != 0;
+        }
+
+        // ---------- AI Initialization from Settings ----------
+        // Configures AIPlayer with loaded settings
+        // Handles NNUE loading and evaluation mode selection
+        void InitializeAIFromSettings()
+        {
+            // Apply difficulty level
+            m_ai.SetDifficulty(m_level);
+            
+            // Configure parallel search threads
+            m_ai.SetThreads(m_numThreads);
+
+            // Attempt to load neural network evaluation
+            if (m_ai.LoadNnue("nn-small.nnue"))
+            {
+                // NNUE loaded successfully - configure evaluation mode
+                if (m_useNeuralEval)
+                {
+                    // Auto mode: Use neural eval when beneficial
+                    m_ai.GetEvaluator().SetMode(Chess::Neural::EvalMode::Auto);
+                }
+                else
+                {
+                    // Classical mode: Traditional evaluation only
+                    m_ai.GetEvaluator().SetMode(Chess::Neural::EvalMode::Classical);
+                }
+            }
+            else
+            {
+                // NNUE loading failed - fall back to classical evaluation
+                m_ai.GetEvaluator().SetMode(Chess::Neural::EvalMode::Classical);
+            }
+        }
+
         // ---------- UCI Command: uci ----------
         // Engine must identify itself and list available options
         void HandleUCI()
@@ -152,9 +238,11 @@ namespace Chess
 
             // Supported UCI options
             // These allow GUIs to configure the engine through their interface
-            std::cout << "option name Threads type spin default 4 min 1 max 64\n";
+            std::cout << "option name Threads type spin default " << m_numThreads 
+                      << " min 1 max 64\n";
             std::cout << "option name Hash type spin default 64 min 1 max 1024\n";
-            std::cout << "option name Level type spin default 5 min 1 max 10\n";
+            std::cout << "option name Level type spin default " << m_level 
+                      << " min 1 max 10\n";
 
             // Standard options that GUIs expect (even if we don't fully implement them)
             std::cout << "option name Ponder type check default false\n";
@@ -273,26 +361,28 @@ namespace Chess
 
             // Launch search in background thread
             // This allows GUI to send "stop" command while we're thinking
-			m_searchThread = std::thread([this, boardCopy, timeMs]() mutable
-			{
-				m_ai.SetDifficulty(m_level);
+            m_searchThread = std::thread([this, boardCopy, timeMs]() mutable
+            {
+                // Configure AI for this search
+                m_ai.SetDifficulty(m_level);
+                m_ai.SetThreads(m_numThreads);
 
-				// Check for mate/stalemate - no legal moves available
-				// UCI protocol requires "0000" notation for null move
-				// Arena and other GUIs expect this in game-ending positions
-				auto legalMoves = boardCopy.GenerateLegalMoves();
-				if (legalMoves.empty())
-				{
-					std::cout << "bestmove 0000\n" << std::flush;
-					return;
-				}
+                // Check for mate/stalemate - no legal moves available
+                // UCI protocol requires "0000" notation for null move
+                // Arena and other GUIs expect this in game-ending positions
+                auto legalMoves = boardCopy.GenerateLegalMoves();
+                if (legalMoves.empty())
+                {
+                    std::cout << "bestmove 0000\n" << std::flush;
+                    return;
+                }
 
-				Move bestMove = m_ai.CalculateBestMove(boardCopy, timeMs);
+                Move bestMove = m_ai.CalculateBestMove(boardCopy, timeMs);
 
-				// UCI protocol requires bestmove output even after "stop" command
-				// GUIs like Arena wait for bestmove to confirm search completion
-				std::cout << "bestmove " << bestMove.ToUCI() << "\n" << std::flush;
-			});
+                // UCI protocol requires bestmove output even after "stop" command
+                // GUIs like Arena wait for bestmove to confirm search completion
+                std::cout << "bestmove " << bestMove.ToUCI() << "\n" << std::flush;
+            });
         }
 
         // Calculate how much time to spend on this move
@@ -369,7 +459,8 @@ namespace Chess
                 try
                 {
                     int threads = std::stoi(valueStr);
-                    m_ai.SetThreads(threads);
+                    m_numThreads = std::clamp(threads, 1, 64);
+                    m_ai.SetThreads(m_numThreads);
                 }
                 catch (...) { /* Invalid value - ignore */ }
             }
@@ -390,6 +481,10 @@ namespace Chess
                 {
                     int level = std::stoi(valueStr);
                     m_level = std::clamp(level, 1, 10);
+                    m_ai.SetDifficulty(m_level);
+                    
+                    // Reinitialize AI to apply level-dependent settings
+                    InitializeAIFromSettings();
                 }
                 catch (...) { /* Invalid value - ignore */ }
             }
