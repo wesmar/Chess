@@ -4,6 +4,8 @@
 #pragma once
 
 #include "Board.h"
+#include <vector>
+#include <cstdint>
 
 namespace Chess
 {
@@ -22,12 +24,59 @@ namespace Chess
     constexpr int MATE_SCORE = 29000;      // Checkmate score threshold
     constexpr int INFINITY_SCORE = 31000;  // Alpha-beta infinity bound
 
+    // ========== EVALUATION CACHE ==========
+    // Optional cache for position evaluations to reduce redundant computation
+    // Stores evaluation results keyed by Zobrist hash
+    // Thread-safe for single-threaded use; use thread_local for multi-threading
+    
+    struct EvalCacheEntry
+    {
+        uint64_t key = 0;      // Zobrist key of cached position
+        int score = 0;         // Evaluation score for this position
+        uint8_t age = 0;       // Generation counter for cache aging
+    };
+
+    class EvalCache
+    {
+    public:
+        // Initialize cache to default size (disabled)
+        EvalCache() = default;
+
+        // Resize cache to specified size in megabytes
+        // Size of 0 disables caching (default behavior)
+        void Resize(size_t sizeMB);
+
+        // Attempt to retrieve cached evaluation score
+        // Returns true if position found in cache, false otherwise
+        // On success, writes score to output parameter
+        bool Probe(uint64_t key, int& score) const;
+
+        // Store evaluation score for given position
+        // Uses Zobrist key for fast lookup
+        void Store(uint64_t key, int score);
+
+        // Clear cache by incrementing generation counter
+        // Invalidates all entries without zeroing memory
+        void Clear();
+
+        // Get current cache size in entries
+        [[nodiscard]] size_t GetSize() const noexcept { return m_table.size(); }
+
+        // Check if cache is enabled (non-zero size)
+        [[nodiscard]] bool IsEnabled() const noexcept { return !m_table.empty(); }
+
+    private:
+        std::vector<EvalCacheEntry> m_table;
+        uint8_t m_generation = 0;
+    };
+
     // ========== EVALUATION FUNCTIONS ==========
     
     // Main evaluation function - comprehensive position assessment
     // Combines material, PST, king safety, mobility, pawn structure, passed pawns
     // Uses tapered eval to interpolate between middlegame and endgame
     // Returns score from side-to-move perspective (positive = good for side to move)
+    // Optionally uses evaluation cache if provided and enabled
     int Evaluate(const Board& board);
     
     // Get base material value for piece type
@@ -44,4 +93,10 @@ namespace Chess
     // Used for tapered evaluation (interpolating between middlegame and endgame scores)
     // Returns: 256 at start (full material), 0 in bare king endgame
     int ComputePhase(const Board& board);
+
+    // ========== GLOBAL EVALUATION CACHE ==========
+    // Single global cache instance for evaluation memoization
+    // Can be resized/cleared via AIPlayer API methods
+    // Default state: disabled (zero size)
+    extern EvalCache g_evalCache;
 }

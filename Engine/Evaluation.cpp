@@ -5,7 +5,11 @@
 
 namespace Chess
 {
-    // Calculate king distance using Chebyshev distance (chessboard distance)
+	// ========== GLOBAL EVALUATION CACHE ==========
+    // Single global instance - default disabled (size 0)
+    EvalCache g_evalCache;
+    
+	// Calculate king distance using Chebyshev distance (chessboard distance)
     // This is the minimum number of king moves needed to reach a square
     // Equal to max(|file_diff|, |rank_diff|)
     int KingDistance(int sq1, int sq2)
@@ -956,7 +960,12 @@ namespace Chess
     // This smoothly transitions between middlegame and endgame evaluation
     int Evaluate(const Board& board)
     {
-        // Start with incrementally maintained material+PST score
+        uint64_t key = board.GetZobristKey();
+        int cachedScore;
+        if (g_evalCache.Probe(key, cachedScore))
+        {
+            return cachedScore;
+        }
         int mgScore = board.GetIncrementalScore();
         int egScore = 0;
         int whiteBishops = 0;
@@ -1005,9 +1014,9 @@ namespace Chess
                     if (IsSquareAttacked(board, sq, enemyColor))
                     {
                         if (color == PlayerColor::White)
-                            mgScore -= 150;  // Queen under attack penalty
+                            mgScore -= 80;  // Queen under attack penalty
                         else
-                            mgScore += 150;
+                            mgScore += 80;
                     }
                 }
 
@@ -1072,7 +1081,7 @@ namespace Chess
 
         // Tempo bonus - side to move has slight advantage
         // Having the initiative is valuable (can make threats, improve position)
-        int tempo = (board.GetSideToMove() == PlayerColor::White) ? 12 : -12;  // Increased from 10 to 12
+        int tempo = (board.GetSideToMove() == PlayerColor::White) ? 8 : -8;  // Tested from 8 to 12
         mgScore += tempo;
         egScore += tempo / 2;  // Tempo less important in endgame
 
@@ -1082,9 +1091,60 @@ namespace Chess
         // phase=0 (endgame) -> 100% egScore
         // phase=128 (middle) -> 50% mgScore + 50% egScore
         int score = (mgScore * phase + egScore * (256 - phase)) / 256;
-
-        // Return from side-to-move perspective
-        // Positive score = good for side to move, negative = bad
-        return (board.GetSideToMove() == PlayerColor::White) ? score : -score;
+        int finalScore = (board.GetSideToMove() == PlayerColor::White) ? score : -score;
+        
+        g_evalCache.Store(key, finalScore);
+        
+        return finalScore;
     }
+	
+	// ========== EVALCACHE IMPLEMENTATION ==========
+    
+    void EvalCache::Resize(size_t sizeMB)
+    {
+        if (sizeMB == 0)
+        {
+            m_table.clear();
+            m_table.shrink_to_fit();
+            return;
+        }
+        
+        size_t entries = (sizeMB * 1024 * 1024) / sizeof(EvalCacheEntry);
+        m_table.resize(entries);
+        Clear();
+    }
+    
+    bool EvalCache::Probe(uint64_t key, int& score) const
+    {
+        if (m_table.empty()) return false;
+        
+        size_t index = key % m_table.size();
+        const auto& entry = m_table[index];
+        
+        if (entry.key == key)
+        {
+            score = entry.score;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    void EvalCache::Store(uint64_t key, int score)
+    {
+        if (m_table.empty()) return;
+        
+        size_t index = key % m_table.size();
+        m_table[index] = {key, score, m_generation};
+    }
+    
+    void EvalCache::Clear()
+    {
+        m_generation++;
+        if (m_generation == 0)
+        {
+            std::fill(m_table.begin(), m_table.end(), EvalCacheEntry{0, 0, 0});
+        }
+    }
+
 }

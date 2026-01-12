@@ -78,6 +78,8 @@ namespace Chess
 
         // Get evaluator for direct access
         Neural::HybridEvaluator& GetEvaluator() { return m_evaluator; }
+		void SetEvalCacheSizeMB(int sizeMB);
+        void ClearEvalCache();
 
     private:
         DifficultyLevel m_difficulty;

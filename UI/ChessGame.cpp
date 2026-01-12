@@ -98,6 +98,16 @@ namespace Chess
         }
     }
 
+	void AIPlayer::SetEvalCacheSizeMB(int sizeMB)
+    {
+        Chess::g_evalCache.Resize(sizeMB);
+    }
+
+    void AIPlayer::ClearEvalCache()
+    {
+        Chess::g_evalCache.Clear();
+    }
+
     void AIPlayer::AbortSearch()
     {
         // Signal all search threads to stop as soon as possible.
@@ -546,7 +556,7 @@ namespace Chess
 			// Aspiration windows for depth >= 4
 			if (depth >= 4 && bestScore > -MATE_SCORE + 1000 && bestScore < MATE_SCORE - 1000)
 			{
-				const int ASPIRATION_WINDOW = 50;
+				const int ASPIRATION_WINDOW = 100;
 				alpha = bestScore - ASPIRATION_WINDOW;
 				beta = bestScore + ASPIRATION_WINDOW;
 			}
@@ -747,9 +757,8 @@ namespace Chess
         if (beta > mateBeta) beta = mateBeta;
         if (alpha >= beta) return alpha;
 
-        // Futility pruning - skip nodes unlikely to raise alpha
-        // In positions far below alpha with little depth remaining, trying to improve
-        // the score is futile. Skip full search and return approximate value.
+		// Futility pruning - skip nodes unlikely to raise alpha
+        // If position is far below alpha (by futilityMargin), return alpha immediately
         // Only apply when not in check (dangerous positions need full analysis)
         if (m_difficulty > 6 && depth <= 4 && !board.IsInCheck(board.GetCurrentPlayer()))
         {
@@ -909,7 +918,7 @@ namespace Chess
 
             if (applyLMR)
             {
-                int lmrReduction = 1 + moveIndex / 8 + depth / 6;
+                int lmrReduction = 1 + moveIndex / 8 + depth / 8;
                 if (lmrReduction >= depth) lmrReduction = depth - 1;
 
                 score = -AlphaBeta(board, depth - 1 - lmrReduction, -alpha - 1, -alpha, ply + 1);
@@ -939,7 +948,8 @@ namespace Chess
                 // Update history and killer moves for quiet moves that cause cutoffs
                 if (isQuiet)
                 {
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
+                    // Use depth squared to give more weight to deeper cutoffs (more reliable)
+					m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
 
                     // Store killer move
                     if (ply < MAX_PLY)
@@ -1245,7 +1255,7 @@ namespace Chess
 
             if (applyLMR)
             {
-                int lmrReduction = 1 + moveIndex / 8 + depth / 6;
+                int lmrReduction = 1 + moveIndex / 8 + depth / 8;
                 if (lmrReduction >= depth) lmrReduction = depth - 1;
 
                 score = -WorkerAlphaBeta(board, depth - 1 - lmrReduction, -alpha - 1, -alpha, ply + 1, tld);
@@ -1272,7 +1282,8 @@ namespace Chess
                 // Update heuristics on beta cutoff
                 if (isQuiet)
                 {
-                    m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
+                    // Use depth squared to give more weight to deeper cutoffs (more reliable)
+					m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
 
                     if (ply < MAX_PLY)
                     {
@@ -2103,7 +2114,7 @@ namespace Chess
         auto& aiPlayer = GetCurrentAIPlayer();
         Move bestMove = aiPlayer->CalculateBestMove(m_board);
         
-        if (bestMove.GetFrom() != bestMove.GetTo()) // Valid move check
+        if (bestMove.IsValid()) 
         {
             MakeMove(bestMove);
         }

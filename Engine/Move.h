@@ -21,8 +21,13 @@ namespace Chess
     class Move
     {
     public:
-        // Default constructor - creates null move
-        constexpr Move() = default;
+        // Manually initialized for null move semantics
+                constexpr Move() noexcept
+            : m_data(0xFFFFFFFF)
+            , m_captured(EMPTY_PIECE)
+        {
+        }
+
 
         // Construct move with all parameters
         // @param from: Source square (0-63)
@@ -77,6 +82,16 @@ namespace Chess
         [[nodiscard]] constexpr uint32_t GetRawData() const noexcept
         {
             return m_data;
+        }
+		// Check if move is valid (not null move)
+        [[nodiscard]] constexpr bool IsValid() const noexcept
+        {
+            return m_data != 0xFFFFFFFF;
+        }
+		// Factory method for invalid/null move
+        static constexpr Move Invalid() noexcept
+        {
+            return Move();
         }
 
         // ========== UTILITY METHODS ==========
