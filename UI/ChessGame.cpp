@@ -245,7 +245,7 @@ namespace Chess
     }
 
 	// Main search function - find best move using iterative deepening with root-parallel search
-	Move AIPlayer::CalculateBestMove(const Board& board, int maxTimeMs)
+	Move AIPlayer::CalculateBestMove(const Board& board, int maxTimeMs, int maxDepth)
 	{
 		m_abortSearch.store(false, std::memory_order_release);
 		m_searchStartTime = std::chrono::steady_clock::now();
@@ -253,18 +253,6 @@ namespace Chess
 
 		// Reset NNUE accumulator state for new search
 		m_evaluator.PrepareSearch();
-
-		// Set search time based on difficulty level
-		if (m_difficulty <= 2)
-			m_maxSearchTimeMs = 100;
-		else if (m_difficulty <= 4)
-			m_maxSearchTimeMs = 1000;
-		else if (m_difficulty <= 6)
-			m_maxSearchTimeMs = 3000;
-		else if (m_difficulty <= 8)
-			m_maxSearchTimeMs = 5000;
-		else
-			m_maxSearchTimeMs = 10000;
 
 		Board searchBoard = board;
 		auto legalMoves = searchBoard.GenerateLegalMoves();
@@ -287,6 +275,7 @@ namespace Chess
 		}
 
 		const int MAX_DEPTH = 30;
+		int searchMaxDepth = (maxDepth > 0 && maxDepth < MAX_DEPTH) ? maxDepth : MAX_DEPTH;
 
 		// Level 1: Weak play with preference for active moves
 		// Uses 1-ply evaluation with bonuses for captures, development, and center control
@@ -544,7 +533,7 @@ namespace Chess
 		int bestScore = -INFINITY_SCORE;
 
 		// Iterative deepening with root-parallel search and aspiration windows
-		for (int depth = 1; depth <= MAX_DEPTH; ++depth)
+		for (int depth = 1; depth <= searchMaxDepth; ++depth)
 		{
 			if (ShouldStop()) break;
 

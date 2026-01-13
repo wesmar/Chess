@@ -56,7 +56,7 @@ namespace Chess
     std::optional<Move> Move::FromUCI(const std::string& uci, const Board& board)
     {
         // UCI moves are 4-5 characters: "e2e4" or "e7e8q"
-        if (uci.size() < 4)
+        if (uci.size() != 4 && uci.size() != 5)
             return std::nullopt;
 
         // Parse file and rank characters to integer indices

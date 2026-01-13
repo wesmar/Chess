@@ -349,7 +349,7 @@ namespace Chess
             }
 
             // Calculate time budget for this move
-            int timeMs = CalculateSearchTime(movetime, depth, infinite, 
+            int timeMs = CalculateSearchTime(movetime, infinite,
                                               wtime, btime, winc, binc);
 
             // Take a snapshot of current position for the search thread
@@ -361,7 +361,7 @@ namespace Chess
 
             // Launch search in background thread
             // This allows GUI to send "stop" command while we're thinking
-            m_searchThread = std::thread([this, boardCopy, timeMs]() mutable
+            m_searchThread = std::thread([this, boardCopy, timeMs, depth]() mutable
             {
                 // Configure AI for this search
                 m_ai.SetDifficulty(m_level);
@@ -377,16 +377,19 @@ namespace Chess
                     return;
                 }
 
-                Move bestMove = m_ai.CalculateBestMove(boardCopy, timeMs);
+                Move bestMove = m_ai.CalculateBestMove(boardCopy, timeMs, depth);
 
                 // UCI protocol requires bestmove output even after "stop" command
                 // GUIs like Arena wait for bestmove to confirm search completion
-                std::cout << "bestmove " << bestMove.ToUCI() << "\n" << std::flush;
+                if (!bestMove.IsValid())
+                    std::cout << "bestmove 0000\n" << std::flush;
+                else
+                    std::cout << "bestmove " << bestMove.ToUCI() << "\n" << std::flush;
             });
         }
 
         // Calculate how much time to spend on this move
-        int CalculateSearchTime(int movetime, int depth, bool infinite,
+        int CalculateSearchTime(int movetime, bool infinite,
                                 int wtime, int btime, int winc, int binc)
         {
             // Priority 1: Explicit movetime
@@ -396,10 +399,6 @@ namespace Chess
             // Priority 2: Infinite analysis mode
             if (infinite)
                 return 60 * 60 * 1000; // 1 hour (effectively infinite)
-
-            // Priority 3: Depth limit without time (rough conversion)
-            if (depth > 0)
-                return std::clamp(depth * 300, 100, 10000);
 
             // Priority 4: Clock-based time management
             Board snapshot;

@@ -54,8 +54,9 @@ namespace Chess
         // Uses iterative deepening with time management
         // @param board: Current position to analyze
         // @param maxTimeMs: Maximum thinking time in milliseconds
+        // @param maxDepth: Maximum search depth (0 = no limit)
         // @return: Best move found within time limit
-        Move CalculateBestMove(const Board& board, int maxTimeMs = 5000);
+        Move CalculateBestMove(const Board& board, int maxTimeMs = 5000, int maxDepth = 0);
 
         // Update AI difficulty and transposition table size
         void SetDifficulty(DifficultyLevel difficulty);
