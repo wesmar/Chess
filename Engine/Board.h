@@ -177,7 +177,19 @@ namespace Chess
             return m_zobristKey;
         }
 
-        // Get incrementally maintained score (material + PST)
+        // Get incrementally maintained middlegame score (material + MG PST)
+        [[nodiscard]] constexpr int GetMGScore() const noexcept
+        {
+            return m_incrementalScore;
+        }
+
+        // Get incrementally maintained endgame score (material + EG PST)
+        [[nodiscard]] constexpr int GetEGScore() const noexcept
+        {
+            return m_egScore;
+        }
+
+        // Legacy alias
         [[nodiscard]] constexpr int GetIncrementalScore() const noexcept
         {
             return m_incrementalScore;
@@ -192,6 +204,12 @@ namespace Chess
         [[nodiscard]] constexpr bool IsOccupied(int square) const noexcept
         {
             return (m_allOccupied & (1ULL << square)) != 0;
+        }
+
+        // Get pawn bitboard for given color (for fast file queries in evaluation)
+        [[nodiscard]] constexpr uint64_t GetPawnMask(PlayerColor color) const noexcept
+        {
+            return m_pawnMasks[static_cast<int>(color)];
         }
 
         // ========== MOVE GENERATION & VALIDATION ==========
@@ -277,6 +295,7 @@ namespace Chess
             int previousKingSquares[2] = {-1, -1};
             uint64_t previousZobristKey = 0;
             int previousIncrementalScore = 0;
+            int previousEGScore = 0;
         };
 
         // Get last move record for analysis (e.g., move ordering heuristics)
@@ -351,11 +370,19 @@ namespace Chess
         // Piece lists for fast iteration [White, Black]
         PieceList m_pieceLists[2];
 
-        // Incrementally maintained evaluation score (material + PST)
+        // Incrementally maintained MG score (material + MG PST, white minus black)
         int m_incrementalScore = 0;
+
+        // Incrementally maintained EG score (material + EG PST, white minus black)
+        int m_egScore = 0;
 
         // Bitboard occupancy tracking (hybrid architecture)
         uint64_t m_allOccupied = 0;
+
+        // Per-color pawn bitboards — updated incrementally in MakeMoveUnchecked,
+        // rebuilt in RebuildOccupancy/UndoMove.  Used for fast open-file queries
+        // in evaluation without scanning all 64 squares.
+        uint64_t m_pawnMasks[2] = {0ULL, 0ULL}; // [0]=White, [1]=Black
 
         // Move history for undo functionality
         std::array<MoveRecord, 512> m_moveHistory;

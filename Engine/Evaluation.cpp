@@ -24,74 +24,130 @@ namespace Chess
     // Values are from White's perspective (rank 0 = White's back rank, rank 7 = Black's back rank)
     // Black's values are automatically mirrored when evaluating
 
-    // Pawn PST - encourages central control and advancement
-    // Pawns gain value as they advance towards promotion
-    // Central pawns (d/e files) are more valuable than flank pawns
-    constexpr int PAWN_PST[64] = {
-         0,  0,  0,  0,  0,  0,  0,  0,   // Rank 1 (back rank) - pawns shouldn't be here
-        50, 50, 50, 50, 50, 50, 50, 50,   // Rank 2 (starting rank) - good value
-        10, 10, 20, 30, 30, 20, 10, 10,   // Rank 3 - central pawns get bonus
-         5,  5, 10, 25, 25, 10,  5,  5,   // Rank 4 - advanced central pawns very strong
-         0,  0,  0, 20, 20,  0,  0,  0,   // Rank 5 - central control bonus
-         5, -5,-10,  0,  0,-10, -5,  5,   // Rank 6 - discourage weak pawns
-         5, 10, 10,-20,-20, 10, 10,  5,   // Rank 7 - about to promote (huge value)
-         0,  0,  0,  0,  0,  0,  0,  0    // Rank 8 - promotion square
+    // ========== TAPERED EVAL PST TABLES ==========
+    // Separate Middlegame (MG) and Endgame (EG) tables for each piece type.
+    // Index layout: index 0-7 = rank 1 (white back rank), index 56-63 = rank 8.
+    // White pieces use the square index directly; black pieces have rank mirrored.
+    // This ensures advancing pawns (increasing rank) get increasing bonuses.
+
+    // Pawn MG - central advance and promotion drive
+    constexpr int PAWN_PST_MG[64] = {
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 1 (no pawns on back rank)
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 2 (starting squares, neutral)
+        -5,  -5,  -5,   0,   0,  -5,  -5,  -5,   // rank 3
+         5,   5,  10,  20,  20,  10,   5,   5,   // rank 4 - central advance
+        10,  10,  20,  30,  30,  20,  10,  10,   // rank 5
+        25,  25,  30,  30,  30,  30,  25,  25,   // rank 6
+        50,  55,  55,  55,  55,  55,  55,  50,   // rank 7 - imminent promotion
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 8 (promotion square)
     };
 
-    // Knight PST - encourages centralization and development
-    // Knights are most effective in the center where they control many squares
-    // Edge and corner knights are penalized (fewer squares controlled)
-    constexpr int KNIGHT_PST[64] = {
-       -50,-40,-30,-30,-30,-30,-40,-50,   // Back rank - undeveloped knights
-       -40,-20,  0,  0,  0,  0,-20,-40,   // Rank 2 - slightly better
-       -30,  0, 10, 15, 15, 10,  0,-30,   // Rank 3 - good development
-       -30,  5, 15, 20, 20, 15,  5,-30,   // Rank 4 - strong central knights
-       -30,  0, 15, 20, 20, 15,  0,-30,   // Rank 5 - also very strong
-       -30,  5, 10, 15, 15, 10,  5,-30,   // Rank 6 - advanced knights
-       -40,-20,  0,  5,  5,  0,-20,-40,   // Rank 7
-       -50,-40,-30,-30,-30,-30,-40,-50    // Rank 8 - "knight on the rim is dim"
+    // Pawn EG - advancement critical, central less dominant
+    constexpr int PAWN_PST_EG[64] = {
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 1
+        -5,  -5,  -5,  -5,  -5,  -5,  -5,  -5,   // rank 2 - penalty for stuck pawns
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 3
+         5,   5,   5,  10,  10,   5,   5,   5,   // rank 4
+        20,  20,  20,  25,  25,  20,  20,  20,   // rank 5
+        40,  40,  40,  45,  45,  40,  40,  40,   // rank 6
+        70,  75,  75,  75,  75,  75,  75,  70,   // rank 7
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 8
     };
 
-    // Bishop PST - encourages long diagonals and development
-    // Bishops work best on long open diagonals
-    // Fianchetto positions (b2/g2) are valuable
-    constexpr int BISHOP_PST[64] = {
-       -20,-10,-10,-10,-10,-10,-10,-20,   // Back rank
-       -10,  0,  0,  0,  0,  0,  0,-10,   // Rank 2
-       -10,  0,  5, 10, 10,  5,  0,-10,   // Rank 3 - good diagonals
-       -10,  5,  5, 10, 10,  5,  5,-10,   // Rank 4 - central bishops
-       -10,  0, 10, 10, 10, 10,  0,-10,   // Rank 5 - strong placement
-       -10, 10, 10, 10, 10, 10, 10,-10,   // Rank 6 - very active
-       -10,  5,  0,  0,  0,  0,  5,-10,   // Rank 7 - fianchetto bonus
-       -20,-10,-10,-10,-10,-10,-10,-20    // Rank 8
+    // Knight MG - centralization is key
+    constexpr int KNIGHT_PST_MG[64] = {
+       -50, -40, -30, -30, -30, -30, -40, -50,   // rank 1 - rim penalty
+       -40, -20,   0,   5,   5,   0, -20, -40,   // rank 2
+       -30,   5,  15,  20,  20,  15,   5, -30,   // rank 3
+       -30,   5,  20,  25,  25,  20,   5, -30,   // rank 4 - best outpost
+       -30,   0,  15,  25,  25,  15,   0, -30,   // rank 5
+       -30,   5,  15,  20,  20,  15,   5, -30,   // rank 6
+       -40, -20,   0,   5,   5,   0, -20, -40,   // rank 7
+       -50, -40, -30, -30, -30, -30, -40, -50,   // rank 8
     };
 
-    // Rook PST - encourages open files and 7th rank
-    // Rooks belong on open files and the 7th rank (attacking pawns)
-    // Rooks are relatively piece-value heavy, so PST bonuses are smaller
-    constexpr int ROOK_PST[64] = {
-         0,  0,  0,  0,  0,  0,  0,  0,   // Rank 1 - starting position
-         5, 10, 10, 10, 10, 10, 10,  5,   // Rank 2 - bonus for active rooks
-        -5,  0,  0,  0,  0,  0,  0, -5,   // Rank 3
-        -5,  0,  0,  0,  0,  0,  0, -5,   // Rank 4
-        -5,  0,  0,  0,  0,  0,  0, -5,   // Rank 5
-        -5,  0,  0,  0,  0,  0,  0, -5,   // Rank 6
-        -5,  0,  0,  0,  0,  0,  0, -5,   // Rank 7 - "rook on the 7th" is powerful
-         0,  0,  0,  5,  5,  0,  0,  0    // Rank 8
+    // Knight EG - rim even worse, value decreases overall
+    constexpr int KNIGHT_PST_EG[64] = {
+       -60, -40, -30, -30, -30, -30, -40, -60,   // rank 1
+       -40, -20,  -5,   0,   0,  -5, -20, -40,   // rank 2
+       -30,  -5,  10,  15,  15,  10,  -5, -30,   // rank 3
+       -30,   0,  15,  20,  20,  15,   0, -30,   // rank 4
+       -30,   0,  15,  20,  20,  15,   0, -30,   // rank 5
+       -30,  -5,  10,  15,  15,  10,  -5, -30,   // rank 6
+       -40, -20,  -5,   0,   0,  -5, -20, -40,   // rank 7
+       -60, -40, -30, -30, -30, -30, -40, -60,   // rank 8
     };
 
-    // Queen PST - encourages development and avoiding early aggression
-    // Queen should develop later (not too early to avoid being chased)
-    // Central queen is strong but also vulnerable
-    constexpr int QUEEN_PST[64] = {
-       -20,-10,-10, -5, -5,-10,-10,-20,   // Back rank
-       -10,  0,  0,  0,  0,  0,  0,-10,   // Rank 2 - premature development penalty
-       -10,  0,  5,  5,  5,  5,  0,-10,   // Rank 3
-        -5,  0,  5,  5,  5,  5,  0, -5,   // Rank 4 - centralized queen
-         0,  0,  5,  5,  5,  5,  0, -5,   // Rank 5
-       -10,  5,  5,  5,  5,  5,  0,-10,   // Rank 6
-       -10,  0,  5,  0,  0,  0,  0,-10,   // Rank 7
-       -20,-10,-10, -5, -5,-10,-10,-20    // Rank 8
+    // Bishop MG - long diagonals and fianchetto
+    constexpr int BISHOP_PST_MG[64] = {
+       -20, -10, -10, -10, -10, -10, -10, -20,   // rank 1
+       -10,   5,   0,   0,   0,   0,   5, -10,   // rank 2 (b2/g2 fianchetto good)
+       -10,  10,  10,  10,  10,  10,  10, -10,   // rank 3
+       -10,   0,  10,  15,  15,  10,   0, -10,   // rank 4
+       -10,   5,   5,  15,  15,   5,   5, -10,   // rank 5
+       -10,   0,   5,  10,  10,   5,   0, -10,   // rank 6
+       -10,   0,   0,   0,   0,   0,   0, -10,   // rank 7
+       -20, -10, -10, -10, -10, -10, -10, -20,   // rank 8
+    };
+
+    // Bishop EG - open diagonals dominate
+    constexpr int BISHOP_PST_EG[64] = {
+       -20, -10, -10, -10, -10, -10, -10, -20,   // rank 1
+       -10,   0,   0,   0,   0,   0,   0, -10,   // rank 2
+       -10,   0,  10,  10,  10,  10,   0, -10,   // rank 3
+       -10,   0,  10,  15,  15,  10,   0, -10,   // rank 4
+       -10,   0,  10,  15,  15,  10,   0, -10,   // rank 5
+       -10,   0,  10,  10,  10,  10,   0, -10,   // rank 6
+       -10,   0,   0,   0,   0,   0,   0, -10,   // rank 7
+       -20, -10, -10, -10, -10, -10, -10, -20,   // rank 8
+    };
+
+    // Rook MG - 7th rank bonus, open files handled in EvaluateRooks
+    constexpr int ROOK_PST_MG[64] = {
+         0,   0,   0,   5,   5,   0,   0,   0,   // rank 1
+        -5,   0,   0,   0,   0,   0,   0,  -5,   // rank 2
+        -5,   0,   0,   0,   0,   0,   0,  -5,   // rank 3
+        -5,   0,   0,   0,   0,   0,   0,  -5,   // rank 4
+        -5,   0,   0,   0,   0,   0,   0,  -5,   // rank 5
+        -5,   0,   0,   0,   0,   0,   0,  -5,   // rank 6
+         5,  10,  10,  10,  10,  10,  10,   5,   // rank 7 - rook on the 7th!
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 8
+    };
+
+    // Rook EG - 7th rank dominance, penetration
+    constexpr int ROOK_PST_EG[64] = {
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 1
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 2
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 3
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 4
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 5
+         0,   0,   0,   0,   0,   0,   0,   0,   // rank 6
+        10,  15,  15,  15,  15,  15,  15,  10,   // rank 7
+         5,   5,   5,   5,   5,   5,   5,   5,   // rank 8 (supporting passed pawn)
+    };
+
+    // Queen MG - avoid premature development
+    constexpr int QUEEN_PST_MG[64] = {
+       -20, -10, -10,  -5,  -5, -10, -10, -20,   // rank 1
+       -10,   0,   5,   0,   0,   0,   0, -10,   // rank 2
+       -10,   5,   5,   5,   5,   5,   0, -10,   // rank 3
+        -5,   0,   5,   5,   5,   5,   0,  -5,   // rank 4
+         0,   0,   5,   5,   5,   5,   0,  -5,   // rank 5
+       -10,   5,   5,   5,   5,   5,   0, -10,   // rank 6
+       -10,   0,   0,   0,   0,   0,   0, -10,   // rank 7
+       -20, -10, -10,  -5,  -5, -10, -10, -20,   // rank 8
+    };
+
+    // Queen EG - active, centralized queen is decisive
+    constexpr int QUEEN_PST_EG[64] = {
+       -30, -20, -10, -10, -10, -10, -20, -30,   // rank 1
+       -20,  -5,   0,   0,   0,   0,  -5, -20,   // rank 2
+       -10,   0,  10,  10,  10,  10,   0, -10,   // rank 3
+       -10,   0,  10,  15,  15,  10,   0, -10,   // rank 4
+       -10,   0,  10,  15,  15,  10,   0, -10,   // rank 5
+       -10,   0,  10,  10,  10,  10,   0, -10,   // rank 6
+       -20,  -5,   0,   0,   0,   0,  -5, -20,   // rank 7
+       -30, -20, -10, -10, -10, -10, -20, -30,   // rank 8
     };
 
     // King PST (Middlegame) - encourages castling and safety
@@ -138,33 +194,46 @@ namespace Chess
         }
     }
 
-    // Get positional bonus from piece-square table
-    // PST values are added to base material value for total piece worth
-    //
-    // Important: PST are defined from White's perspective
-    // For Black pieces, we mirror the rank (rank 0 <-> rank 7)
-    int GetPSTValue(PieceType type, int square, PlayerColor color)
+    // Mirror square for black pieces (PST tables are from white's perspective)
+    static inline int MirrorSquare(int square, PlayerColor color)
     {
-        int sq = square;
-
-        // Mirror the square for Black pieces (PST defined from White's view)
-        // This means white pawn on e2 uses rank 1, black pawn on e7 uses rank 1 (mirrored)
         if (color == PlayerColor::Black)
         {
             int file = square % 8;
             int rank = square / 8;
-            sq = (7 - rank) * 8 + file;  // Flip rank: 0->7, 1->6, etc.
+            return (7 - rank) * 8 + file;
         }
+        return square;
+    }
 
-        // Lookup positional value in appropriate table
+    // Get middlegame positional bonus (used for incremental m_mgScore in Board)
+    int GetPSTValue(PieceType type, int square, PlayerColor color)
+    {
+        int sq = MirrorSquare(square, color);
         switch (type)
         {
-        case PieceType::Pawn: return PAWN_PST[sq];
-        case PieceType::Knight: return KNIGHT_PST[sq];
-        case PieceType::Bishop: return BISHOP_PST[sq];
-        case PieceType::Rook: return ROOK_PST[sq];
-        case PieceType::Queen: return QUEEN_PST[sq];
-        case PieceType::King: return KING_PST[sq];
+        case PieceType::Pawn:   return PAWN_PST_MG[sq];
+        case PieceType::Knight: return KNIGHT_PST_MG[sq];
+        case PieceType::Bishop: return BISHOP_PST_MG[sq];
+        case PieceType::Rook:   return ROOK_PST_MG[sq];
+        case PieceType::Queen:  return QUEEN_PST_MG[sq];
+        case PieceType::King:   return KING_PST[sq];
+        default: return 0;
+        }
+    }
+
+    // Get endgame positional bonus (used for incremental m_egScore in Board)
+    int GetEGPSTValue(PieceType type, int square, PlayerColor color)
+    {
+        int sq = MirrorSquare(square, color);
+        switch (type)
+        {
+        case PieceType::Pawn:   return PAWN_PST_EG[sq];
+        case PieceType::Knight: return KNIGHT_PST_EG[sq];
+        case PieceType::Bishop: return BISHOP_PST_EG[sq];
+        case PieceType::Rook:   return ROOK_PST_EG[sq];
+        case PieceType::Queen:  return QUEEN_PST_EG[sq];
+        case PieceType::King:   return KING_ENDGAME_PST[sq];
         default: return 0;
         }
     }
@@ -257,24 +326,13 @@ namespace Chess
             }
         }
 
-        // Open file evaluation
-        // Files near king without friendly pawns are dangerous (rook attacks)
+        // Open file evaluation — use pawn bitboard for O(1) file check
+        const uint64_t ownPawnMask = board.GetPawnMask(color);
         for (int f = std::max(0, file - 1); f <= std::min(7, file + 1); ++f)
         {
-            bool hasPawn = false;
-            for (int r = 0; r < 8; ++r)
-            {
-                Piece p = board.GetPieceAt(f, r);
-                if (p.IsType(PieceType::Pawn) && p.IsColor(color))
-                {
-                    hasPawn = true;
-                    break;
-                }
-            }
-            if (!hasPawn)
-            {
-                safety -= 20; // Increased penalty from 15 to 20 for open file near king
-            }
+            uint64_t fileMask = 0x0101010101010101ULL << f;
+            if ((ownPawnMask & fileMask) == 0)
+                safety -= 20; // Open file near king — penalty
         }
 
         // Enemy attacking pieces evaluation
@@ -757,44 +815,37 @@ namespace Chess
     int EvaluateRooks(const Board& board)
     {
         int score = 0;
-        
-        // Count pawns per file for both colors
-        std::array<int, 8> whitePawnFiles = {0};
-        std::array<int, 8> blackPawnFiles = {0};
-        
-        for (int sq = 0; sq < 64; ++sq)
-        {
-            Piece p = board.GetPieceAt(sq);
-            if (p.IsType(PieceType::Pawn))
-            {
-                int file = sq % 8;
-                if (p.IsColor(PlayerColor::White))
-                    whitePawnFiles[file]++;
-                else
-                    blackPawnFiles[file]++;
-            }
-        }
+
+        // Use precomputed pawn bitboards — one bit per square, no 64-square scan needed
+        // fileMask[f] = all squares on file f: 0x0101010101010101 << f
+        const uint64_t whitePawns = board.GetPawnMask(PlayerColor::White);
+        const uint64_t blackPawns = board.GetPawnMask(PlayerColor::Black);
 
         for (int colorIdx = 0; colorIdx < 2; ++colorIdx)
         {
             PlayerColor color = static_cast<PlayerColor>(colorIdx);
             const PieceList& list = board.GetPieceList(color);
-            
+
             int rookCount = 0;
             int rookFiles[2] = {-1, -1};
-            
+
             for (int i = 0; i < list.count; ++i)
             {
                 int sq = list.squares[i];
                 Piece piece = board.GetPieceAt(sq);
                 if (!piece.IsType(PieceType::Rook)) continue;
-                
+
                 int file = sq % 8;
                 int rank = sq / 8;
-                
-                // Determine if file is open, semi-open, or closed
-                bool ownPawns = (color == PlayerColor::White) ? whitePawnFiles[file] > 0 : blackPawnFiles[file] > 0;
-                bool enemyPawns = (color == PlayerColor::White) ? blackPawnFiles[file] > 0 : whitePawnFiles[file] > 0;
+
+                // Bitwise open-file check — no loop over 8 ranks
+                uint64_t fileMask = 0x0101010101010101ULL << file;
+                bool ownPawns   = (color == PlayerColor::White)
+                                  ? (whitePawns & fileMask) != 0
+                                  : (blackPawns & fileMask) != 0;
+                bool enemyPawns = (color == PlayerColor::White)
+                                  ? (blackPawns & fileMask) != 0
+                                  : (whitePawns & fileMask) != 0;
                 
                 int bonus = 0;
                 if (!ownPawns && !enemyPawns)
@@ -966,76 +1017,44 @@ namespace Chess
         {
             return cachedScore;
         }
-        int mgScore = board.GetIncrementalScore();
-        int egScore = 0;
+        // MG and EG base scores are maintained incrementally in Board
+        // (material + MG/EG PST for all pieces, white minus black)
+        int mgScore = board.GetMGScore();
+        int egScore = board.GetEGScore();
         int whiteBishops = 0;
         int blackBishops = 0;
 
         // Compute game phase for score interpolation
         int phase = ComputePhase(board);
 
-        // Lambda to process pieces for one color
-        // Evaluates piece-specific factors that aren't in incremental score
-        auto processPieces = [&](PlayerColor color)
+        // Lean pass: bishop count + queen exposure (not in incremental scores)
+        for (int ci = 0; ci < 2; ++ci)
         {
+            PlayerColor color = static_cast<PlayerColor>(ci);
+            PlayerColor enemy = static_cast<PlayerColor>(ci ^ 1);
             const PieceList& list = board.GetPieceList(color);
             for (int i = 0; i < list.count; ++i)
             {
                 int sq = list.squares[i];
                 Piece piece = board.GetPieceAt(sq);
-
                 if (piece.IsEmpty()) continue;
-
                 PieceType type = piece.GetType();
-                int value = GetPieceValue(type);
-                int egPST = GetPSTValue(type, sq, color);
 
-                // Use endgame king PST for king in endgame evaluation
-                if (type == PieceType::King)
+                if (type == PieceType::Bishop)
                 {
-                    int sq_adjusted = sq;
-                    if (color == PlayerColor::Black)
+                    if (color == PlayerColor::White) whiteBishops++;
+                    else blackBishops++;
+                }
+                else if (type == PieceType::Queen)
+                {
+                    if (IsSquareAttacked(board, sq, enemy))
                     {
-                        int file = sq % 8;
-                        int rank = sq / 8;
-                        sq_adjusted = (7 - rank) * 8 + file;
+                        if (color == PlayerColor::White) mgScore -= 80;
+                        else                             mgScore += 80;
                     }
-                    egPST = KING_ENDGAME_PST[sq_adjusted];
-                }
-
-                int egPieceScore = value + egPST;
-
-                // Penalize exposed queen in middlegame
-                // Queen on attacked square is vulnerable to tactics
-                if (type == PieceType::Queen)
-                {
-                    PlayerColor enemyColor = (color == PlayerColor::White) ?
-                        PlayerColor::Black : PlayerColor::White;
-                    if (IsSquareAttacked(board, sq, enemyColor))
-                    {
-                        if (color == PlayerColor::White)
-                            mgScore -= 80;  // Queen under attack penalty
-                        else
-                            mgScore += 80;
-                    }
-                }
-
-                // Accumulate endgame score
-                if (color == PlayerColor::White)
-                {
-                    egScore += egPieceScore;
-                    if (type == PieceType::Bishop) whiteBishops++;
-                }
-                else
-                {
-                    egScore -= egPieceScore;
-                    if (type == PieceType::Bishop) blackBishops++;
                 }
             }
-        };
-
-        processPieces(PlayerColor::White);
-        processPieces(PlayerColor::Black);
+        }
 
         // Bishop pair bonus
         // Two bishops work well together, controlling both diagonal colors

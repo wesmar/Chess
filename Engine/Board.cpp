@@ -73,8 +73,11 @@ namespace Chess
 		m_pieceLists[0] = other.m_pieceLists[0];
 		m_pieceLists[1] = other.m_pieceLists[1];
 		m_incrementalScore = other.m_incrementalScore;
+		m_egScore = other.m_egScore;
 		m_allOccupied = other.m_allOccupied;
-		
+		m_pawnMasks[0] = other.m_pawnMasks[0];
+		m_pawnMasks[1] = other.m_pawnMasks[1];
+
 		// Copy only active history entries (not all 512)
 		m_historyPly = other.m_historyPly;
 		for (int i = 0; i < m_historyPly; ++i)
@@ -177,32 +180,37 @@ namespace Chess
         if (piece.IsEmpty()) return;
 
         int value = GetPieceValue(piece.GetType());
-        int pstValue = GetPSTValue(piece.GetType(), square, piece.GetColor());
+        int mgPST = GetPSTValue(piece.GetType(), square, piece.GetColor());
+        int egPST = GetEGPSTValue(piece.GetType(), square, piece.GetColor());
 
-        int score = value + pstValue;
+        int mgScore = value + mgPST;
+        int egScore = value + egPST;
 
-        // Negate score for Black pieces (evaluation is from White's perspective)
+        // Negate scores for Black pieces (evaluation is from White's perspective)
         if (piece.GetColor() == PlayerColor::Black)
         {
-            score = -score;
+            mgScore = -mgScore;
+            egScore = -egScore;
         }
 
-        // Add or subtract score delta
         if (add)
         {
-            m_incrementalScore += score;
+            m_incrementalScore += mgScore;
+            m_egScore += egScore;
         }
         else
         {
-            m_incrementalScore -= score;
+            m_incrementalScore -= mgScore;
+            m_egScore -= egScore;
         }
     }
 
-    // Recompute incremental score from scratch
-    // Called after FEN loading or when score may be corrupted
+    // Recompute both incremental scores from scratch
+    // Called after FEN loading or when scores may be corrupted
     void Board::RecomputeIncrementalScore()
     {
         m_incrementalScore = 0;
+        m_egScore = 0;
         for (int sq = 0; sq < SQUARE_COUNT; ++sq)
         {
             Piece piece = m_board[sq];
@@ -216,12 +224,15 @@ namespace Chess
     void Board::RebuildOccupancy()
     {
         m_allOccupied = 0ULL;
+        m_pawnMasks[0] = 0ULL;
+        m_pawnMasks[1] = 0ULL;
         for (int sq = 0; sq < SQUARE_COUNT; ++sq)
         {
-            if (!m_board[sq].IsEmpty())
-            {
-                SetOccupiedBit(sq);
-            }
+            const Piece& p = m_board[sq];
+            if (p.IsEmpty()) continue;
+            SetOccupiedBit(sq);
+            if (p.IsType(PieceType::Pawn))
+                m_pawnMasks[static_cast<int>(p.GetColor())] |= (1ULL << sq);
         }
     }
 
@@ -320,6 +331,7 @@ namespace Chess
         record.previousKingSquares[1] = m_kingSquares[1];
         record.previousZobristKey = m_zobristKey;
         record.previousIncrementalScore = m_incrementalScore;
+        record.previousEGScore = m_egScore;
 
         const int from = move.GetFrom();
         const int to = move.GetTo();
@@ -401,11 +413,16 @@ namespace Chess
         HandleEnPassant(move);
         HandleCastling(move);
 
-        // Update bitboard occupancy
+        // Update bitboard occupancy + pawn masks
+        const int sideIdx = static_cast<int>(m_sideToMove);
+        const bool movingPawn = m_board[from].IsType(PieceType::Pawn);
+
         ClearOccupiedBit(from);
         if (!m_board[to].IsEmpty())
         {
             ClearOccupiedBit(to);
+            if (m_board[to].IsType(PieceType::Pawn))
+                m_pawnMasks[static_cast<int>(m_board[to].GetColor())] &= ~(1ULL << to);
         }
 
         // Move piece to destination square
@@ -415,10 +432,18 @@ namespace Chess
 
         SetOccupiedBit(to);
 
-        // Handle promotion - replace pawn with promoted piece
+        // Pawn mask: moving pawn leaves 'from', arrives at 'to'
+        if (movingPawn)
+        {
+            m_pawnMasks[sideIdx] &= ~(1ULL << from);
+            m_pawnMasks[sideIdx] |=  (1ULL << to);
+        }
+
+        // Handle promotion - replace pawn with promoted piece (pawn disappears)
         if (move.IsPromotion())
         {
             m_board[move.GetTo()] = Piece(move.GetPromotion(), m_sideToMove, true);
+            m_pawnMasks[sideIdx] &= ~(1ULL << to); // Promoted pawn removed from mask
         }
 
         // Add piece to destination square (Zobrist)
@@ -453,7 +478,9 @@ namespace Chess
         {
             int capturedPawnSquare = to + ((m_sideToMove == PlayerColor::White) ? -8 : 8);
             ClearOccupiedBit(capturedPawnSquare);
-            Piece capturedPawn = Piece(PieceType::Pawn, (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
+            PlayerColor capturedColor = (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White;
+            Piece capturedPawn = Piece(PieceType::Pawn, capturedColor);
+            m_pawnMasks[static_cast<int>(capturedColor)] &= ~(1ULL << capturedPawnSquare);
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(capturedPawn.GetType())][static_cast<int>(capturedPawn.GetColor())][capturedPawnSquare];
             UpdateIncrementalScore(capturedPawnSquare, capturedPawn, false);
             m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Remove(capturedPawnSquare);
@@ -604,6 +631,7 @@ namespace Chess
         m_kingSquares[1] = record.previousKingSquares[1];
         m_zobristKey = record.previousZobristKey;
         m_incrementalScore = record.previousIncrementalScore;
+        m_egScore = record.previousEGScore;
 
         // Update full move counter
         if (m_sideToMove == PlayerColor::Black)

@@ -85,6 +85,11 @@ namespace Chess
         // This ensures mate-in-N is correctly represented at any search depth
         void Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove, int ply);
 
+        // Probe table for any matching entry regardless of depth/flag constraints
+        // Used by Singular Extensions to retrieve a reference score for the TT move
+        // Returns true if key matches (any entry), outputs raw score and best move
+        bool ProbeSE(uint64_t key, int& outScore, Move& outBestMove);
+
     private:
         std::vector<TTEntry> m_entries;  // Entry storage array
         size_t m_size;                   // Number of entries (power of 2)

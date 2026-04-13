@@ -83,10 +83,11 @@ namespace Chess
     // Returns centipawn value without positional considerations
     int GetPieceValue(PieceType type);
     
-    // Get positional bonus from piece-square table
-    // Returns bonus/penalty for piece placement on specific square
-    // PST values encourage good piece placement (center control, king safety, etc.)
+    // Get middlegame positional bonus from piece-square table
     int GetPSTValue(PieceType type, int square, PlayerColor color);
+
+    // Get endgame positional bonus from piece-square table
+    int GetEGPSTValue(PieceType type, int square, PlayerColor color);
 
     // Compute game phase as continuous value from 0 (endgame) to 256 (opening)
     // Based on remaining material with weights: Q=4, R=2, B=1, N=1

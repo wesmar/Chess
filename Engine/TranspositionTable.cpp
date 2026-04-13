@@ -206,4 +206,24 @@ namespace Chess
         }
         // Otherwise keep existing entry (deeper search already cached)
     }
+
+    // Probe for any matching entry regardless of depth or flag constraints
+    // Used by Singular Extensions: we need a reference score for the TT move
+    // without the usual depth/bound-type filtering that would discard valid SE info.
+    // Thread-safe via striped locking.
+    bool TranspositionTable::ProbeSE(uint64_t key, int& outScore, Move& outBestMove)
+    {
+        size_t index = key & (m_size - 1);
+        size_t lockIdx = GetLockIndex(index);
+
+        std::lock_guard<std::mutex> lock(m_mutexes[lockIdx]);
+        const TTEntry& entry = m_entries[index];
+
+        if (entry.key != key)
+            return false;
+
+        outScore = entry.score;
+        outBestMove = entry.bestMove;
+        return true;
+    }
 }

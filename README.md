@@ -36,31 +36,36 @@ The engine employs a comprehensive suite of search techniques:
 
 #### Pruning Techniques
 - **Null Move Pruning (NMP)** - skips branches where opponent can't improve even with two consecutive moves; disabled in endgames to avoid zugzwang errors
-- **Late Move Reduction (LMR)** - reduces depth for quiet moves late in move list, with re-search on alpha improvement
+- **ProbCut** - prunes branches where shallow tactical search at higher beta already exceeds the expected bound; uses captures-only search with SEE filter
+- **Late Move Reduction (LMR)** - reduces depth for quiet moves late in move list using logarithmic formula `log(depth) × log(moveIndex) / 2.25`, with re-search on alpha improvement
 - **Late Move Pruning (LMP)** - completely skips late quiet moves at shallow depths
-- **Futility Pruning** - skips nodes unlikely to raise alpha based on static evaluation margin
-- **Razoring** - reduces depth when position evaluation far exceeds beta
+- **Futility Pruning** - skips quiet moves at shallow depths when static eval + margin ≤ alpha
+- **Reverse Futility Pruning (RFP)** - returns early when static eval − margin ≥ beta (static null move pruning)
 - **Delta Pruning** - in quiescence search, skips captures that can't possibly raise alpha
 - **Mate Distance Pruning** - stops searching for longer mates when shorter one already found
 
 #### Search Extensions
 - **Check Extensions** - extends search depth when side to move is in check
+- **Singular Extensions (SE)** - extends the TT move when a reduced search with lowered beta confirms it is the only good move in the position; uses `excludedMove` parameter to prevent recursive SE
 
 #### Position Caching
 - **Zobrist Hashing** - lightning-fast incremental position comparison using XOR-sum
-- **Transposition Table** - avoids re-analyzing positions with striped locking for thread safety
+- **Transposition Table** - avoids re-analyzing positions with striped locking for thread safety; separate `ProbeSE()` method for Singular Extension reference scores
+- **Internal Iterative Deepening (IID)** - searches shallowly to find a good TT move when none is available, improving move ordering at cost-effective depth
 - **Threefold Repetition Detection** - recognizes draw by repetition during search
 
 #### Move Ordering Heuristics
-- **MVV-LVA (Most Valuable Victim - Least Valuable Attacker)** - prioritizes high-value captures
-- **SEE (Static Exchange Evaluation)** - evaluates capture sequences to order winning captures first
-- **Killer Move Heuristic** - remembers quiet moves that caused beta cutoffs at each ply
-- **History Heuristic** - side-specific scoring for quiet moves that historically performed well
+- **TT Move** - transposition table best move searched first
+- **SEE (Static Exchange Evaluation)** - evaluates capture sequences; winning captures (SEE ≥ 0) ordered before killers, losing captures (SEE < 0) ordered last
+- **MVV-LVA (Most Valuable Victim - Least Valuable Attacker)** - breaks ties among captures of equal SEE
+- **Killer Move Heuristic** - remembers quiet moves that caused beta cutoffs at each ply (two slots per ply)
+- **Countermove Heuristic** - remembers the quiet move that refuted the previous move; provides a third ordering hint after killers
+- **History Heuristic** - side-specific scoring for quiet moves that historically caused cutoffs, with **aging** (values halved at each iterative deepening iteration to prioritize recent data)
 - **Center Control Bonus** - tactical bonus for moves targeting central squares
 
 #### Parallel Search
 - **Root-Parallel Search** - multi-threaded search with dynamic load balancing and shared alpha
-- **Thread-Local Heuristics** - separate killer move tables per thread to prevent data races
+- **Thread-Local Heuristics** - separate killer move and countermove tables per thread to prevent data races
 
 #### Opening Book
 - **Hardcoded Opening Lines** - Zobrist-indexed book with random move selection for variety
@@ -77,8 +82,9 @@ The engine employs a comprehensive suite of search techniques:
 
 #### Incremental Updates
 - **Incremental Zobrist Key** - XOR updates instead of full recomputation
-- **Incremental Score Maintenance** - material + PST score updated on each move
+- **Incremental MG/EG Score Maintenance** - both middlegame and endgame scores (material + PST) updated on each move, eliminating per-evaluation recomputation
 - **Bitboard Occupancy Tracking** - hybrid architecture for fast sliding piece queries
+- **Pawn Bitboards per Color** - `m_pawnMasks[2]` updated incrementally, enabling O(1) open-file and pawn shield queries in evaluation
 
 #### Hybrid Board Representation
 - **64-byte Mailbox (Cache-Aligned)** - entire board state in single L1 cache line
@@ -90,19 +96,21 @@ The engine employs a comprehensive suite of search techniques:
 A tuned evaluation function with tapered scoring:
 
 #### Material & Positional
-- **Piece-Square Tables (PST)** - separate middlegame and endgame tables
-- **Tapered Evaluation** - smooth interpolation based on game phase (256 = opening, 0 = endgame)
+- **Piece-Square Tables (PST)** - separate middlegame and endgame tables for every piece type (pawn, knight, bishop, rook, queen; king already had separate MG/EG tables)
+- **Tapered Evaluation** - smooth interpolation based on game phase: `score = (mgScore × phase + egScore × (256 − phase)) / 256`; phase computed from remaining material (Q=4, R=2, B/N=1, max=24 → maps to 0–256)
+- **Incremental EG Score** - `m_egScore` maintained alongside `m_incrementalScore` (MG), restored via `MoveRecord` on undo — zero extra work per evaluation call
 - **Bishop Pair Bonus** - +40 centipawns for having both bishops
 
 #### King Safety (Middlegame)
 - **Castling Position Bonus** - rewards castled king placement
-- **Pawn Shield Analysis** - evaluates pawns protecting the king
-- **Open File Penalty** - penalizes missing pawns near king
+- **Pawn Shield Analysis** - evaluates pawns protecting the king using pawn bitboards
+- **Open File Penalty** - penalizes missing pawns near king (O(1) via pawn bitboard file mask)
 
 #### Piece Activity
 - **Mobility Evaluation** - counts accessible squares for sliding pieces using bitboard occupancy
 - **Center Control Bonus** - rewards knights and bishops on central squares
-- **Exposed Queen Penalty** - penalizes queen on attacked square
+- **Exposed Queen Penalty** - penalizes queen on attacked square in middlegame
+- **Piece Tropism** - bonus for pieces close to the enemy king
 
 #### Pawn Structure
 - **Isolated Pawn Penalty** - pawns with no friendly pawns on adjacent files
@@ -115,7 +123,7 @@ A tuned evaluation function with tapered scoring:
 - **Rook Behind Passed Pawn** - bonus for rook supporting from behind
 
 #### Tempo
-- **Side to Move Bonus** - small advantage for having the move (+10 centipawns)
+- **Side to Move Bonus** - small advantage for having the move (+8 centipawns)
 
 ### 🤖 NNUE Infrastructure (Prepared)
 
@@ -208,7 +216,7 @@ Chess/
 ├── Engine/                    # Chess engine core
 │   ├── Board.cpp/h           # Board representation and move execution
 │   ├── ChessConstants.h      # Core constants and enums
-│   ├── Evaluation.cpp/h      # Position evaluation with PST tables
+│   ├── Evaluation.cpp/h      # Position evaluation with tapered PST tables
 │   ├── Move.cpp/h            # Move representation (32-bit packed)
 │   ├── MoveGenerator.cpp/h   # Legal move generation
 │   ├── OpeningBook.cpp/h     # Hardcoded opening book
@@ -258,17 +266,23 @@ If you're new to chess programming, here's a suggested reading order:
 
 **Mailbox vs Bitboards**: While bitboards are faster for some operations, the mailbox representation (64-element array) provides better cache locality for iterative search algorithms, which dominate chess engine runtime.
 
-**Piece-Square Tables (PST)**: Arrays that assign values to pieces based on their position. For example, knights are worth more in the center than on the edge.
+**Piece-Square Tables (PST)**: Arrays that assign values to pieces based on their position. Separate MG and EG tables allow the engine to value the same square differently depending on game phase — for example, an advanced pawn near promotion is worth far more in the endgame.
 
 **Alpha-Beta Pruning**: If you find a move that's already better than the best option your opponent has, you don't need to check other moves in that branch.
 
 **Null Move Pruning**: If giving the opponent a free move still doesn't help them, the position is so good we can skip detailed analysis of this branch.
+
+**ProbCut**: If a shallow tactical search (captures only) already exceeds a higher beta threshold, the full-depth search is extremely unlikely to fall below beta — so prune immediately.
+
+**Singular Extensions**: If the TT move is significantly better than all other moves (verified by a reduced-depth search with lowered beta), extend its search depth by one. Ensures the engine doesn't underestimate forced lines.
 
 **Late Move Reduction**: Moves that appear worse (ordered late) are searched to a shallower depth initially. If they turn out to be good, we re-search them at full depth.
 
 **Transposition Table**: Chess positions can be reached through different move orders. The table remembers positions we've already evaluated, with striped locking for thread-safe parallel access.
 
 **Root-Parallel Search**: Multiple threads search different root moves simultaneously with dynamic work distribution, avoiding the complexity of shared search trees.
+
+**Tapered Evaluation**: The same position is worth different amounts in the opening vs. endgame. The engine maintains two incremental scores (MG and EG) and interpolates between them based on remaining material.
 
 ## Settings
 
@@ -344,33 +358,43 @@ DarkSquare=70,80,100
 - Fixed 256-move array covers all legal chess positions (max ~218 moves)
 - Predictable memory access patterns for CPU prefetcher
 
+**Why Incremental MG/EG Scores?**
+- Tapered eval requires both scores on every node
+- Recomputing from scratch each call would be O(pieces) per node
+- Incremental updates keep it O(1) — just save/restore one integer per move
+
 ## 🚀 Roadmap
 
 ### Completed ✅
-- [x] Null Move Pruning (NMP) implementation
-- [x] Late Move Reduction (LMR) with re-search
+- [x] Null Move Pruning (NMP)
+- [x] ProbCut (tactical captures-only, SEE filtered)
+- [x] Late Move Reduction (LMR) — logarithmic formula with re-search
 - [x] Late Move Pruning (LMP)
 - [x] Futility Pruning
-- [x] Razoring
-- [x] Aspiration Windows
+- [x] Reverse Futility Pruning (RFP / Static Null Move)
 - [x] Delta Pruning in Quiescence
 - [x] Mate Distance Pruning
 - [x] Check Extensions
-- [x] SEE (Static Exchange Evaluation)
+- [x] Singular Extensions with `excludedMove` parameter
+- [x] Internal Iterative Deepening (IID)
+- [x] Aspiration Windows
+- [x] SEE (Static Exchange Evaluation) — move ordering and QS pruning
+- [x] Killer Move Heuristic (two slots per ply)
+- [x] Countermove Heuristic
+- [x] History Heuristic with aging (halving per iteration)
+- [x] Tapered Evaluation — separate MG/EG PST tables for all piece types
+- [x] Incremental MG + EG scores (zero-cost per evaluation call)
+- [x] Pawn bitboards for O(1) open-file and pawn shield queries
 - [x] Cache-aligned memory structures
 - [x] Stack-allocated MoveList
 - [x] Root-parallel search with dynamic load balancing
 - [x] NNUE infrastructure (HybridEvaluator, NeuralEvaluator, etc.)
 
-### In Progress 🔄
-- [ ] NNUE weight training and integration
-- [ ] Enhanced King Safety evaluation (tropism, attack units)
-- [ ] Singular Extensions
-
 ### Future 📋
+- [ ] NNUE weight training and integration
 - [ ] Syzygy tablebase support
 - [ ] MultiPV analysis mode
-- [ ] Time management improvements
+- [ ] Texel Tuning for PST and eval weights
 
 ## Challenge
 

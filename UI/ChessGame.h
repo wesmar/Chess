@@ -119,14 +119,17 @@ namespace Chess
         // ========== SEARCH ALGORITHMS ==========
         
         // Alpha-beta negamax with pruning optimizations
-        int AlphaBeta(Board& board, int depth, int alpha, int beta, int ply);
-        
+        // excludedMove: when set (IsValid()), that move is skipped in the loop (used for SE)
+        int AlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
+                      Move excludedMove = Move{});
+
         // Quiescence search - tactical move resolution
         int QuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
 
         // Worker thread search with thread-local data
+        // excludedMove: when set (IsValid()), that move is skipped in the loop (used for SE)
         int WorkerAlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
-                            ThreadLocalData& tld);
+                            ThreadLocalData& tld, Move excludedMove = Move{});
         int WorkerQuiescence(Board& board, int alpha, int beta, int ply, int qDepth,
                              ThreadLocalData& tld);
 
