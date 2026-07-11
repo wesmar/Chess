@@ -69,9 +69,10 @@ The engine employs a comprehensive suite of search techniques:
 - **Stack-Allocated Move Scoring** - `OrderMoves` uses a 256-element stack buffer instead of `std::vector<std::pair<int, Move>>`, removing the last heap allocation from the search hot path
 - **Center Control Bonus** - tactical bonus for moves targeting central squares
 
-#### Parallel Search
-- **Root-Parallel Search** - multi-threaded search with dynamic load balancing and shared alpha
-- **Thread-Local Heuristics** - separate killer move and countermove tables per thread to prevent data races
+#### Parallel Search (Lazy SMP)
+- **Lazy SMP with a persistent thread pool** - helper threads search the *same root position* at staggered depths and coordinate purely through the shared lock-free transposition table; no root splitting, no shared alpha, no synchronization in the search itself. Measured: **+147 Elo at 4 threads** (LOS 100%), NPS ×4.1, +1 ply at equal time
+- **Zero spawn cost** - helpers live inside the engine and sleep on a condition variable between moves; a search wakes them, timeout or completion puts them back to sleep
+- **Thread-Local Heuristics** - separate killer move tables per thread; history/continuation tables are shared atomics (relaxed ordering)
 
 #### Opening Book
 - **Hardcoded Opening Lines** - Zobrist-indexed book with random move selection for variety
@@ -229,7 +230,7 @@ Chess/
 │   ├── OpeningBook.cpp/h     # Hardcoded opening book
 │   ├── Piece.h               # Piece representation (8-bit packed)
 │   ├── Search.cpp/h          # AIPlayer: root search + main-thread alpha-beta
-│   ├── SearchWorker.cpp      # Worker-thread search (root-parallel scheme)
+│   ├── SearchWorker.cpp      # Helper-thread search (Lazy SMP scheme)
 │   ├── TranspositionTable.cpp/h # Lock-free hash table (4-way cache-line buckets)
 │   └── Zobrist.cpp/h         # Zobrist hashing for positions
 ├── Engine/Neural/             # NNUE evaluation system
@@ -294,7 +295,7 @@ If you're new to chess programming, here's a suggested reading order:
 
 **Transposition Table**: Chess positions can be reached through different move orders. The table remembers positions we've already evaluated. Ours is fully lock-free (Hyatt XOR-key validation) and organized into 4-way buckets that each fit exactly one 64-byte cache line, with an explicit prefetch issued the moment a move is made.
 
-**Root-Parallel Search**: Multiple threads search different root moves simultaneously with dynamic work distribution, avoiding the complexity of shared search trees.
+**Lazy SMP**: All threads search the same position; the shared transposition table does the coordination. A helper finishing depth *d* leaves deep TT entries and move-ordering hints that the main thread's iterative deepening immediately exploits. Counterintuitive but battle-proven: the redundancy *is* the algorithm.
 
 **Tapered Evaluation**: The same position is worth different amounts in the opening vs. endgame. The engine maintains two incremental scores (MG and EG) and interpolates between them based on remaining material.
 
@@ -399,6 +400,10 @@ Every batch of search changes is validated with cutechess-cli matches (fixed ope
 | 1 | PVS at all nodes, TT-probe-before-pruning, NMP eval gate, aspiration widening, history malus, SEE pruning | **~+200 Elo** (76% score over 194 games) |
 | 2 | Lazy legality, 4-way cache-line TT buckets, TT prefetch, NMP before movegen, AVX2 codegen | **~+120 Elo** vs batch 1; NPS +38%, +1-2 ply at equal time |
 | 3+4 | Staged move picker with lazy SEE (NPS +20%), TT in quiescence, 50-move rule in search, timeout-latch abort, endgame knowledge (mop-up, drawish scaling), O(1) occupancy restore in undo | **+35 Elo** vs batch 2 (LOS 98.7%, 410 games) |
+| 5 | Continuation history, TT generation aging, killers ply+2 clearing | **+8 Elo**; search tree −15% at equal depth |
+| 6 | Lazy SMP: persistent helper pool, whole-root search at staggered depths, TT-only coordination | **+147 Elo at 4 threads** (69.4% over 116 games, LOS 100%) |
+
+Absolute calibration (single thread, fast TC): **~2160 Elo** on the Stockfish UCI_Elo scale — 200-game match vs SF 17 @ 2200 plus a descending ladder (holds SF 2100 at 80%). With 4 threads and the Lazy SMP gain the engine plays at roughly **~2300 on the same scale**.
 
 Batch 3 taught the most valuable lesson of the project: three consecutive test matches showed a "regression"
 that turned out to be time forfeits, not chess. A gated clock check let the search overrun its budget by
@@ -460,7 +465,7 @@ your evaluation.**
 - [x] Cache-aligned memory structures
 - [x] Stack-allocated MoveList
 - [x] Stack-allocated move scoring buffer in `OrderMoves` (no heap alloc per node)
-- [x] Root-parallel search with dynamic load balancing
+- [x] Lazy SMP: persistent thread pool, whole-root helpers, TT-only coordination (+147 Elo @ 4 threads)
 - [x] Lock-free transposition table (Hyatt XOR-key validation, 16-byte entries)
 - [x] TT preservation across moves in the same game (cleared only on `ucinewgame`)
 - [x] Fail-soft returns for futility / reverse futility pruning
@@ -484,12 +489,11 @@ your evaluation.**
 - [x] Timeout latch: gated clock check + per-node abort flag (bounded overshoot)
 - [x] Endgame knowledge: mop-up for bare-king conversion, dead-draw and OCB scaling
 - [x] O(1) occupancy snapshot-restore in UndoMove (no per-undo board rescan)
-- [x] SPRT-driven testing pipeline (`testing/run_match.ps1`)
+- [x] SPRT-driven testing pipeline (`testing/run_match.ps1`, `-Threads` for SMP tests)
+- [x] Continuation history (reply-pair move ordering, 2.25 MB flat table)
 
 ### Future 📋
-- [ ] Lazy SMP with a persistent thread pool (replace root-parallel `std::async`)
 - [ ] Per-thread history tables (eliminate false sharing on shared atomics)
-- [ ] Continuation history (countermove/follow-up history)
 - [ ] NNUE weight training and integration (small fast net, own trainer)
 - [ ] Syzygy tablebase support
 - [ ] MultiPV analysis mode

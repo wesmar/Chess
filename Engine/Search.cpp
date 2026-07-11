@@ -66,10 +66,97 @@ namespace Chess
             }
         }
 
+        // Continuation history - heap allocated (2.25 MB), zero-initialized
+        m_contHist = std::make_unique<std::atomic<int>[]>(CONT_HIST_SIZE);
+        for (int i = 0; i < CONT_HIST_SIZE; ++i)
+            m_contHist[i].store(0, std::memory_order_relaxed);
+
         // Load NNUE neural network for enhanced evaluation if available
         if (m_evaluator.LoadNnue("nn-small.nnue"))
         {
             m_evaluator.SetMode(Neural::EvalMode::Classical);
+        }
+    }
+
+    AIPlayer::~AIPlayer()
+    {
+        // Stop any running search, then shut the helper pool down for good.
+        m_abortSearch.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(m_helperMutex);
+            m_poolQuit = true;
+        }
+        m_helperCv.notify_all();
+        for (auto& t : m_helperPool)
+            if (t.joinable()) t.join();
+    }
+
+    // ========== LAZY SMP HELPER POOL ==========
+
+    void AIPlayer::EnsureHelperPool(int helpers)
+    {
+        if (helpers > 63) helpers = 63;
+        while (static_cast<int>(m_helperPool.size()) < helpers)
+        {
+            int idx = static_cast<int>(m_helperPool.size());
+            m_helperPool.emplace_back(&AIPlayer::HelperLoop, this, idx);
+        }
+    }
+
+    void AIPlayer::StartHelpers(const Board& root, int maxDepth)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_helperMutex);
+            m_helperRoot = root;
+            m_helperMaxDepth = maxDepth;
+            m_searchId++;
+            m_activeHelpers = static_cast<int>(m_helperPool.size());
+        }
+        m_helperCv.notify_all();
+    }
+
+    void AIPlayer::WaitHelpersIdle()
+    {
+        std::unique_lock<std::mutex> lock(m_helperMutex);
+        m_helperDoneCv.wait(lock, [this] { return m_activeHelpers == 0; });
+    }
+
+    void AIPlayer::HelperLoop(int idx)
+    {
+        uint64_t lastSeenId = 0;
+        for (;;)
+        {
+            Board root;
+            int maxDepth;
+            {
+                std::unique_lock<std::mutex> lock(m_helperMutex);
+                m_helperCv.wait(lock, [&] { return m_poolQuit || m_searchId != lastSeenId; });
+                if (m_poolQuit) return;
+                lastSeenId = m_searchId;
+                root = m_helperRoot;
+                maxDepth = m_helperMaxDepth;
+            }
+
+            // Lazy SMP: full-window iterative deepening on the whole root
+            // position (ply 0), coordinating with the main thread purely via
+            // the shared TT. Staggered start depth and step give the helpers
+            // depth diversity: half lead one ply ahead, half sweep every ply.
+            ThreadLocalData tld;
+            int d = 1 + (idx % 2);
+            const int step = ((idx / 2) % 2) ? 2 : 1;
+            while (d <= maxDepth &&
+                   !m_abortSearch.load(std::memory_order_acquire))
+            {
+                Board localBoard = root;
+                WorkerAlphaBeta(localBoard, d, -INFINITY_SCORE, INFINITY_SCORE, 0, tld);
+                d += step;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_helperMutex);
+                if (--m_activeHelpers == 0)
+                    m_helperDoneCv.notify_all();
+            }
         }
     }
 
@@ -117,6 +204,9 @@ namespace Chess
                     m_history[side][from][to].store(0, std::memory_order_relaxed);
                     m_counterMoves[side][from][to] = Move();
                 }
+        if (m_contHist)
+            for (int i = 0; i < CONT_HIST_SIZE; ++i)
+                m_contHist[i].store(0, std::memory_order_relaxed);
         Chess::g_evalCache.Clear();
     }
 
@@ -452,8 +542,32 @@ namespace Chess
 					m_history[side][from][to].store(v - (v >> 3), std::memory_order_relaxed);
 				}
 
+		// Continuation history: same gentle decay
+		for (int i = 0; i < CONT_HIST_SIZE; ++i)
+		{
+			int v = m_contHist[i].load(std::memory_order_relaxed);
+			if (v != 0)
+				m_contHist[i].store(v - (v >> 3), std::memory_order_relaxed);
+		}
+
+		// New TT generation: entries from this search outrank leftovers
+		// of earlier searches in the replacement policy.
+		m_transpositionTable.NewGeneration();
+
 		// Reset node counter for this search.
 		m_nodesSearched.store(0, std::memory_order_relaxed);
+
+		// Launch Lazy SMP helpers: they search the same root at staggered
+		// depths and share only the TT. Their results are never read directly;
+		// the payoff is a hotter TT (deeper entries, better ordering hints)
+		// for the main thread's iterative deepening below.
+		const bool useHelpers = m_numThreads > 1 && m_difficulty >= 6 &&
+		                        legalMoves.size() > 1;
+		if (useHelpers)
+		{
+			EnsureHelperPool(m_numThreads - 1);
+			StartHelpers(searchBoard, searchMaxDepth);
+		}
 
 		Move bestMoveSoFar = legalMoves[0];
 		int bestScore = -INFINITY_SCORE;
@@ -487,131 +601,41 @@ namespace Chess
 			iterBestMove = legalMoves[0];
 			iterBestScore = -INFINITY_SCORE;
 
-			// Root-parallel search with PV searched first (proper root PVS)
-			if (m_numThreads > 1 && legalMoves.size() > 1 && depth >= 4)
+			// Root search: single-threaded PVS over the root moves. With Lazy
+			// SMP active, helper threads are simultaneously deepening the same
+			// position into the shared TT, so interior nodes here hit deep TT
+			// entries far more often - that is the entire parallel gain.
+			for (size_t i = 0; i < legalMoves.size(); ++i)
 			{
-				// Search PV move first in main thread with full window
-				searchBoard.MakeMoveUnchecked(legalMoves[0]);
-				ThreadLocalData pvTld;
-				int pvScore = -WorkerAlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1, pvTld);
-				searchBoard.UndoMove();
+				if (ShouldStop()) break;
 
-				iterBestMove = legalMoves[0];
-				iterBestScore = pvScore;
+				searchBoard.MakeMoveUnchecked(legalMoves[i]);
 
-				if (pvScore > alpha)
+				int score;
+				if (i == 0)
 				{
-					alpha = pvScore;
+					score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
 				}
-
-				// If PV already fails high or time is up, skip launching workers
-				if (pvScore < beta && !ShouldStop())
+				else
 				{
-					// Launch workers for remaining moves starting from index 1
-					int actualThreads = std::min(m_numThreads, static_cast<int>(legalMoves.size()) - 1);
-					std::vector<std::future<std::pair<Move, int>>> futures;
-
-					const Board rootBoard = searchBoard;
-					const size_t totalMoves = legalMoves.size();
-					auto nextMoveIndex = std::make_shared<std::atomic<size_t>>(1);
-					auto sharedAlpha = std::make_shared<std::atomic<int>>(alpha);
-
-					for (int t = 0; t < actualThreads; ++t)
-					{
-						futures.push_back(std::async(std::launch::async,
-							[=, &legalMoves]() mutable -> std::pair<Move, int> {
-								ThreadLocalData tld;
-								Board localBoard = rootBoard;
-								Move localBest;
-								int localScore = -INFINITY_SCORE;
-
-								while (true)
-								{
-									size_t i = nextMoveIndex->fetch_add(1);
-									if (i >= totalMoves) break;
-									if (m_abortSearch.load(std::memory_order_acquire)) break;
-
-									localBoard.MakeMoveUnchecked(legalMoves[i]);
-
-									int currentAlpha = sharedAlpha->load(std::memory_order_acquire);
-
-									// All worker moves use PVS narrow window
-									int score = -WorkerAlphaBeta(localBoard, depth - 1,
-										-currentAlpha - 1, -currentAlpha, 1, tld);
-
-									if (score > currentAlpha && score < beta &&
-										!m_abortSearch.load(std::memory_order_acquire))
-									{
-										score = -WorkerAlphaBeta(localBoard, depth - 1,
-											-beta, -currentAlpha, 1, tld);
-									}
-
-									localBoard.UndoMove();
-
-									if (score > localScore)
-									{
-										localScore = score;
-										localBest = legalMoves[i];
-
-										int prevAlpha = sharedAlpha->load();
-										while (score > prevAlpha &&
-											!sharedAlpha->compare_exchange_weak(prevAlpha, score))
-										{
-										}
-									}
-								}
-								return std::make_pair(localBest, localScore);
-							}
-						));
-					}
-
-					for (auto& f : futures)
-					{
-						auto [move, score] = f.get();
-						if (m_abortSearch.load(std::memory_order_acquire)) continue;
-						if (score > iterBestScore)
-						{
-							iterBestScore = score;
-							iterBestMove = move;
-						}
-					}
-				}
-			}
-			else
-			{
-				// Single-threaded root search with proper PVS
-				for (size_t i = 0; i < legalMoves.size(); ++i)
-				{
-					if (ShouldStop()) break;
-
-					searchBoard.MakeMoveUnchecked(legalMoves[i]);
-
-					int score;
-					if (i == 0)
+					score = -AlphaBeta(searchBoard, depth - 1, -alpha - 1, -alpha, 1);
+					if (score > alpha && score < beta && !ShouldStop())
 					{
 						score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
 					}
-					else
-					{
-						score = -AlphaBeta(searchBoard, depth - 1, -alpha - 1, -alpha, 1);
-						if (score > alpha && score < beta && !ShouldStop())
-						{
-							score = -AlphaBeta(searchBoard, depth - 1, -beta, -alpha, 1);
-						}
-					}
+				}
 
-					searchBoard.UndoMove();
+				searchBoard.UndoMove();
 
-					if (score > iterBestScore)
-					{
-						iterBestScore = score;
-						iterBestMove = legalMoves[i];
-					}
+				if (score > iterBestScore)
+				{
+					iterBestScore = score;
+					iterBestMove = legalMoves[i];
+				}
 
-					if (score > alpha)
-					{
-						alpha = score;
-					}
+				if (score > alpha)
+				{
+					alpha = score;
 				}
 			}
 
@@ -674,8 +698,12 @@ namespace Chess
 			}
 		}
 
-		// Wait for all threads to complete before returning
+		// Stop helpers and wait until they are all asleep before returning -
+		// the next search overwrites m_searchStartTime/m_maxSearchTimeMs and
+		// restages the root, so no helper may still be running.
 		m_abortSearch.store(true, std::memory_order_release);
+		if (useHelpers)
+			WaitHelpersIdle();
 
 		return bestMoveSoFar;
 	}
@@ -764,6 +792,17 @@ namespace Chess
         int staticEval = 0;
         if (!sideInCheck)
             staticEval = m_evaluator.Evaluate(board);
+
+        // "Improving" flag: is our static eval better than two plies ago?
+        // Non-improving nodes get pruned/reduced more aggressively - the
+        // position is trending badly, late quiet moves rarely save it.
+        static thread_local int t_evalStack[MAX_PLY + 2];
+        if (ply < MAX_PLY)
+            t_evalStack[ply] = sideInCheck
+                ? ((ply >= 2) ? t_evalStack[ply - 2] : 0)
+                : staticEval;
+        const bool improving = !sideInCheck && ply >= 2 &&
+                               staticEval > t_evalStack[ply - 2];
 
         // Futility + Reverse Futility Pruning.
         // Fail-soft returns: tighter info for aspiration window.
@@ -920,6 +959,14 @@ namespace Chess
         int moveIndex = 0;
         int searchedMoves = 0;
 
+        // Clear killers two plies ahead: grandchild nodes of this position
+        // will see fresh slots instead of stale moves from sibling subtrees
+        if (ply + 2 < MAX_PLY)
+        {
+            m_killerMoves[ply + 2][0] = Move();
+            m_killerMoves[ply + 2][1] = Move();
+        }
+
         // Quiet moves already searched at this node - penalized in the history
         // table when a later quiet move causes a beta cutoff (history malus).
         std::array<Move, 64> triedQuiets;
@@ -943,7 +990,8 @@ namespace Chess
             // Late Move Pruning - skip late quiet moves at moderate depths
             // After searching many moves, remaining quiet moves are unlikely to improve score
             // Only apply when not at root, depth is moderate, and at least one
-            // legal move has been searched (mate detection stays sound)
+            // legal move has been searched (mate detection stays sound).
+            // Non-improving nodes prune roughly twice as early.
             if (ply > 0 &&
                 depth >= 3 && depth <= 7 &&
                 moveIndex >= (4 + depth * depth / 2) &&
@@ -1077,12 +1125,34 @@ namespace Chess
                         m_killerMoves[ply][0] = move;
                     }
 
-                    // Store counter move - this move refuted opponent's last move
+                    // Counter move + continuation history, keyed by the
+                    // opponent's previous move (board is at this node's state,
+                    // so the last record is exactly that move)
                     if (board.GetHistoryPly() > 0)
                     {
                         const auto& lastRec = board.GetLastMoveRecord();
                         int prevSide = 1 - sideIndex;
                         m_counterMoves[prevSide][lastRec.move.GetFrom()][lastRec.move.GetTo()] = move;
+
+                        if (!lastRec.movedPiece.IsEmpty())
+                        {
+                            const int prevPc = PieceCode(lastRec.movedPiece);
+                            const int prevTo = lastRec.move.GetTo();
+
+                            Piece mp = board.GetPieceAt(move.GetFrom());
+                            if (!mp.IsEmpty())
+                                m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(mp), move.GetTo())]
+                                    .fetch_add(depth * depth, std::memory_order_relaxed);
+
+                            // Continuation-history malus for earlier quiets
+                            for (int q = 0; q < triedQuietCount; ++q)
+                            {
+                                Piece qp = board.GetPieceAt(triedQuiets[q].GetFrom());
+                                if (!qp.IsEmpty())
+                                    m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(qp), triedQuiets[q].GetTo())]
+                                        .fetch_sub(depth * depth, std::memory_order_relaxed);
+                            }
+                        }
                     }
                 }
                 // Store beta as the proven lower bound; fail-hard return avoids

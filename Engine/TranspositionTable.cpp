@@ -125,13 +125,15 @@ namespace Chess
         Bucket& bucket = m_buckets[key & (m_numBuckets - 1)];
 
         // Replacement policy, in priority order:
-        //   1. Same position already stored -> refresh that slot (unless the
-        //      existing entry is strictly deeper and we bring nothing new).
+        //   1. Same position already stored -> refresh that slot (a strictly
+        //      deeper existing entry is kept, but its generation is renewed
+        //      so it doesn't look stale to future replacements).
         //   2. Empty slot.
-        //   3. Shallowest entry in the bucket (always replaced - keeps the
-        //      table fresh across long games without a separate aging field).
+        //   3. Stale-generation entries before current-generation ones,
+        //      shallowest first - deep leftovers from earlier searches stop
+        //      hogging their buckets in long games with a preserved TT.
         Entry* victim = nullptr;
-        int victimDepth = INT_MAX;
+        int victimScore = INT_MAX; // lower = more replaceable
 
         for (int i = 0; i < BUCKET_SIZE; ++i)
         {
@@ -142,29 +144,43 @@ namespace Chess
             if (kxd == 0 && data == 0)
             {
                 // Empty slot - use it unless we find a key match later
-                if (victimDepth > -1)
+                if (victimScore > INT_MIN)
                 {
                     victim = &e;
-                    victimDepth = -1;
+                    victimScore = INT_MIN;
                 }
                 continue;
             }
 
             if ((kxd ^ data) == key)
             {
-                // Same position: keep the deeper of the two entries
+                // Same position: keep the deeper of the two entries, but
+                // refresh its generation so it survives future evictions
                 int existingDepth = static_cast<int>((data >> 48) & 0xFFULL);
                 if (existingDepth > depth)
+                {
+                    if (GenerationOf(data) != m_generation)
+                    {
+                        uint64_t refreshed =
+                            (data & ~(0xFCULL << 56)) |
+                            (static_cast<uint64_t>(m_generation) << 58);
+                        e.data.store(refreshed, std::memory_order_relaxed);
+                        e.keyXorData.store(key ^ refreshed, std::memory_order_relaxed);
+                    }
                     return;
+                }
                 victim = &e;
                 break;
             }
 
+            // Replaceability: current-generation entries are worth +256 depth
+            // so any stale entry is evicted before any fresh one
             int entryDepth = static_cast<int>((data >> 48) & 0xFFULL);
-            if (entryDepth < victimDepth)
+            int score2 = entryDepth + ((GenerationOf(data) == m_generation) ? 256 : 0);
+            if (score2 < victimScore)
             {
                 victim = &e;
-                victimDepth = entryDepth;
+                victimScore = score2;
             }
         }
 
@@ -188,7 +204,7 @@ namespace Chess
         else if (score <= -MATE_IN_MAX_PLY)
             scoreToStore = score - ply;                  // real mate-against-us
 
-        uint64_t packed = PackData(scoreToStore, depth, flag, bestMove);
+        uint64_t packed = PackData(scoreToStore, depth, flag, bestMove, m_generation);
 
         // Store data first, then key^data. Order is not strictly required by
         // the XOR-check protocol (any interleaving fails validation) but writing

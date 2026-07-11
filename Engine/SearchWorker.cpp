@@ -70,6 +70,15 @@ namespace Chess
         if (!sideInCheck)
             staticEval = Chess::Evaluate(board);
 
+        // "Improving" flag (see main-thread comment)
+        static thread_local int t_evalStack[MAX_PLY + 2];
+        if (ply < MAX_PLY)
+            t_evalStack[ply] = sideInCheck
+                ? ((ply >= 2) ? t_evalStack[ply - 2] : 0)
+                : staticEval;
+        const bool improving = !sideInCheck && ply >= 2 &&
+                               staticEval > t_evalStack[ply - 2];
+
         // Futility + Reverse Futility Pruning (same as main thread). Fail-soft returns.
         if (m_difficulty > 6 && depth <= 4 && !sideInCheck)
         {
@@ -204,6 +213,13 @@ namespace Chess
         int moveIndex = 0;
         int searchedMoves = 0;
 
+        // Clear killers two plies ahead (see main-thread comment)
+        if (ply + 2 < MAX_PLY)
+        {
+            tld.killerMoves[ply + 2][0] = Move();
+            tld.killerMoves[ply + 2][1] = Move();
+        }
+
         // Quiet moves already searched at this node (history malus on cutoff)
         std::array<Move, 64> triedQuiets;
         int triedQuietCount = 0;
@@ -223,7 +239,8 @@ namespace Chess
 
             // Late Move Pruning - skip late quiet moves at moderate depths
             // Only apply when not at root, depth is high enough, and at least
-            // one legal move has been searched (mate detection stays sound)
+            // one legal move has been searched (mate detection stays sound).
+            // Non-improving nodes prune roughly twice as early.
             if (ply > 0 &&
                 depth >= 3 && depth <= 7 &&
                 moveIndex >= (4 + depth * depth / 2) &&
@@ -340,11 +357,31 @@ namespace Chess
                         tld.killerMoves[ply][0] = move;
                     }
 
+                    // Counter move + continuation history (see main-thread comment)
                     if (board.GetHistoryPly() > 0)
                     {
                         const auto& lastRec = board.GetLastMoveRecord();
                         int prevSide = 1 - sideIndex;
                         m_counterMoves[prevSide][lastRec.move.GetFrom()][lastRec.move.GetTo()] = move;
+
+                        if (!lastRec.movedPiece.IsEmpty())
+                        {
+                            const int prevPc = PieceCode(lastRec.movedPiece);
+                            const int prevTo = lastRec.move.GetTo();
+
+                            Piece mp = board.GetPieceAt(move.GetFrom());
+                            if (!mp.IsEmpty())
+                                m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(mp), move.GetTo())]
+                                    .fetch_add(depth * depth, std::memory_order_relaxed);
+
+                            for (int q = 0; q < triedQuietCount; ++q)
+                            {
+                                Piece qp = board.GetPieceAt(triedQuiets[q].GetFrom());
+                                if (!qp.IsEmpty())
+                                    m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(qp), triedQuiets[q].GetTo())]
+                                        .fetch_sub(depth * depth, std::memory_order_relaxed);
+                            }
+                        }
                     }
                 }
                 m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);

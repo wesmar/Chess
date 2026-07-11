@@ -14,6 +14,7 @@ param(
     [int]$Rounds = 500,
     [string]$Tc = "8+0.08",
     [int]$Concurrency = 5,
+    [int]$Threads = 1,
     [string]$Out = "match"
 )
 
@@ -26,13 +27,13 @@ foreach ($pair in @(@("new", $New), @("base", $Base))) {
     $dir = Join-Path $root $pair[0]
     New-Item -ItemType Directory -Force $dir | Out-Null
     Copy-Item $pair[1] (Join-Path $dir "engine.exe") -Force
-    Set-Content (Join-Path $dir "settings.ini") "[Game]`r`nAIDifficulty=10`r`nThreads=1`r`nUseNeuralEval=0"
+    Set-Content (Join-Path $dir "settings.ini") "[Game]`r`nAIDifficulty=10`r`nThreads=$Threads`r`nUseNeuralEval=0"
 }
 
 & $cutechess `
     -engine name=NEW cmd="$root\new\engine.exe" dir="$root\new" `
     -engine name=BASE cmd="$root\base\engine.exe" dir="$root\base" `
-    -each proto=uci tc=$Tc option.Threads=1 timemargin=200 `
+    -each proto=uci tc=$Tc option.Threads=$Threads timemargin=200 `
     -games 2 -rounds $Rounds -repeat 2 `
     -sprt elo0=0 elo1=5 alpha=0.05 beta=0.05 `
     -openings file="$openings" format=pgn order=random `

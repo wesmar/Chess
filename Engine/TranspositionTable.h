@@ -59,9 +59,16 @@ namespace Chess
         // Used by Singular Extensions for reference score retrieval.
         bool ProbeSE(uint64_t key, int& outScore, Move& outBestMove);
 
-        // Store with in-bucket replacement (key match > empty slot > shallowest).
+        // Store with in-bucket replacement
+        // (key match > empty slot > stale-generation shallowest > shallowest).
         void Store(uint64_t key, int depth, int score, uint8_t flag,
                    Move bestMove, int ply);
+
+        // Advance the generation counter. Called once per root search so the
+        // replacement policy can tell fresh entries from leftovers of earlier
+        // searches - deep-but-stale entries stop hogging their buckets in
+        // long games where the TT is preserved between moves.
+        void NewGeneration() noexcept { m_generation = (m_generation + 1) & 0x3F; }
 
         // Prefetch the bucket for a position into L1. Call right after making a
         // move so the line is resident by the time the child node probes it.
@@ -93,17 +100,23 @@ namespace Chess
         std::unique_ptr<Bucket[]> m_buckets;
         size_t m_numBuckets = 0;  // Always a power of 2
 
-        static constexpr uint64_t PackData(int score, int depth, uint8_t flag, Move move) noexcept
+        // Search generation, 6 bits. Packed into the upper bits of the flag
+        // byte: flag byte = (bound flags in bits 0-1) | (generation << 2).
+        uint8_t m_generation = 0;
+
+        static constexpr uint64_t PackData(int score, int depth, uint8_t flag,
+                                           Move move, uint8_t generation) noexcept
         {
             uint32_t mvRaw = move.GetRawData();
             uint16_t s16 = static_cast<uint16_t>(static_cast<int16_t>(
                 score < -32000 ? -32000 : (score > 32000 ? 32000 : score)));
             uint8_t d8 = static_cast<uint8_t>(
                 depth < 0 ? 0 : (depth > 255 ? 255 : depth));
+            uint8_t flagByte = static_cast<uint8_t>((flag & 0x03) | (generation << 2));
             return static_cast<uint64_t>(mvRaw)
                  | (static_cast<uint64_t>(s16) << 32)
                  | (static_cast<uint64_t>(d8) << 48)
-                 | (static_cast<uint64_t>(flag) << 56);
+                 | (static_cast<uint64_t>(flagByte) << 56);
         }
 
         static void UnpackData(uint64_t data, int& score, int& depth,
@@ -114,7 +127,12 @@ namespace Chess
             int16_t s16 = static_cast<int16_t>((data >> 32) & 0xFFFFULL);
             score = static_cast<int>(s16);
             depth = static_cast<int>((data >> 48) & 0xFFULL);
-            flag  = static_cast<uint8_t>((data >> 56) & 0xFFULL);
+            flag  = static_cast<uint8_t>((data >> 56) & 0x03ULL); // mask off generation
+        }
+
+        static constexpr uint8_t GenerationOf(uint64_t data) noexcept
+        {
+            return static_cast<uint8_t>((data >> 58) & 0x3FULL);
         }
 
         // Find the entry whose stored key matches, or nullptr.

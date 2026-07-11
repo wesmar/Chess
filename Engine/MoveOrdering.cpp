@@ -527,13 +527,16 @@ namespace Chess
     void AIPlayer::ScoreMovesCheap(const MoveList& moves, int* scores, const Board& board,
                                    Move ttMove, int ply, Move killer0, Move killer1) const
     {
-        // Previous move context for the countermove heuristic (loop-invariant)
-        int prevFrom = -1, prevTo = -1;
+        // Previous move context for countermove + continuation history
+        // (loop-invariant)
+        int prevFrom = -1, prevTo = -1, prevPc = -1;
         if (ply > 0 && board.GetHistoryPly() > 0)
         {
             const auto& lastRecord = board.GetLastMoveRecord();
             prevFrom = lastRecord.move.GetFrom();
             prevTo = lastRecord.move.GetTo();
+            if (!lastRecord.movedPiece.IsEmpty())
+                prevPc = PieceCode(lastRecord.movedPiece);
         }
 
         const int n = moves.size();
@@ -567,7 +570,8 @@ namespace Chess
             if (move == killer0) { scores[i] = 800000; continue; }
             if (move == killer1) { scores[i] = 700000; continue; }
 
-            const int sideIndex = static_cast<int>(board.GetPieceAt(move.GetFrom()).GetColor());
+            const Piece movingPiece = board.GetPieceAt(move.GetFrom());
+            const int sideIndex = static_cast<int>(movingPiece.GetColor());
 
             // Countermove heuristic
             if (prevFrom >= 0)
@@ -580,8 +584,15 @@ namespace Chess
                 }
             }
 
-            // History heuristic + central-square bonus
+            // History + continuation history + central-square bonus
             int historyScore = m_history[sideIndex][move.GetFrom()][move.GetTo()].load(std::memory_order_relaxed);
+
+            if (prevPc >= 0 && !movingPiece.IsEmpty())
+            {
+                historyScore += m_contHist[ContHistIndex(
+                    prevPc, prevTo, PieceCode(movingPiece), move.GetTo())]
+                    .load(std::memory_order_relaxed);
+            }
 
             int toSquare = move.GetTo();
             int centerBonus = 0;

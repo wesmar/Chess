@@ -18,6 +18,9 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 namespace Chess
 {
@@ -45,6 +48,7 @@ namespace Chess
         // Initialize AI with specified difficulty level
         // Higher difficulty = deeper search + more aggressive pruning
         AIPlayer(DifficultyLevel difficulty);
+        ~AIPlayer();
 
         // Calculate best move for current position
         // Uses iterative deepening with time management
@@ -113,7 +117,48 @@ namespace Chess
         std::atomic<int> m_history[2][64][64];           // History heuristic (per side)
         Move m_counterMoves[2][64][64];        // Countermove heuristic [side][from][to]
 
+        // Continuation history: quality of playing (piece,to) as a REPLY to
+        // the opponent's previous (piece,to). Much sharper ordering signal
+        // than from/to history alone because it captures move pairs.
+        // Flat array [prevPiece(12)][prevTo(64)][piece(12)][to(64)] = 2.25 MB,
+        // heap-allocated (too big for an in-object array).
+        static constexpr int CONT_HIST_SIZE = 12 * 64 * 12 * 64;
+        std::unique_ptr<std::atomic<int>[]> m_contHist;
+
+        // 0-11 piece code for continuation history indexing (type + color)
+        static int PieceCode(Piece p) noexcept
+        {
+            return (static_cast<int>(p.GetType()) - 1) + 6 * static_cast<int>(p.GetColor());
+        }
+        static int ContHistIndex(int prevPc, int prevTo, int pc, int to) noexcept
+        {
+            return ((prevPc * 64 + prevTo) * 12 + pc) * 64 + to;
+        }
+
         int m_numThreads = 1;               // Parallel search threads
+
+        // ========== LAZY SMP HELPER POOL ==========
+        // Persistent helper threads searching the SAME root position as the
+        // main thread, at staggered depths, coordinating only through the
+        // shared lock-free TT. No root splitting, no shared alpha: helpers
+        // populate the TT with deep entries and better move ordering, and the
+        // main thread's own iterative deepening reaps them. Threads persist
+        // across moves (no spawn cost per search); they sleep on a condition
+        // variable between searches.
+        std::vector<std::thread> m_helperPool;
+        std::mutex m_helperMutex;
+        std::condition_variable m_helperCv;      // wakes helpers for a new search
+        std::condition_variable m_helperDoneCv;  // signals all helpers idle
+        Board m_helperRoot;                      // root position of current search
+        int m_helperMaxDepth = 0;
+        uint64_t m_searchId = 0;                 // bumped per search; helpers wait for change
+        int m_activeHelpers = 0;                 // helpers currently searching
+        bool m_poolQuit = false;                 // set once in destructor
+
+        void EnsureHelperPool(int helpers);      // grow pool to `helpers` threads
+        void StartHelpers(const Board& root, int maxDepth);
+        void WaitHelpersIdle();                  // after abort: block until all helpers sleep
+        void HelperLoop(int idx);                // helper thread main
 
         // Search abort flag. Set by UCI "stop" AND by ShouldStop() itself when
         // the time budget expires: the clock query is gated (every 1024 nodes),
