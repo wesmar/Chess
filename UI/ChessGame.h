@@ -1,18 +1,17 @@
 ﻿// ChessGame.h
-// Chess game controller and AI player interface
-// Provides game management, move execution, AI opponents, and PGN support
+// Chess game controller interface
+// Provides game management, move execution, AI opponent wiring, and PGN support.
+// The search engine itself (AIPlayer) lives in Engine/Search.h.
 #pragma once
 
 #include "../Engine/Board.h"
+#include "../Engine/Search.h"
 #include "VectorRenderer.h"
-#include "../Engine/TranspositionTable.h"
-#include "../Engine/Neural/HybridEvaluator.h"
 #include <chrono>
 #include <memory>
 #include <vector>
 #include <string>
 #include <optional>
-#include <atomic>
 
 namespace Chess
 {
@@ -23,140 +22,6 @@ namespace Chess
         HumanVsHuman,        // Both players controlled by user
         HumanVsComputer,     // Human plays white, AI plays black
         ComputerVsComputer   // Both players are AI (demo/analysis mode)
-    };
-
-    // ========== AI DIFFICULTY ==========
-    // AI strength levels 1-10
-    // Controls search depth, time allocation, and evaluation complexity
-    using DifficultyLevel = int;
-
-    namespace Difficulty
-    {
-        constexpr int MIN = 1;      // Random moves
-        constexpr int MAX = 10;     // Deep search with all optimizations
-        constexpr int EASY = 2;     // Basic evaluation
-        constexpr int MEDIUM = 5;   // Standard search
-        constexpr int HARD = 7;     // Advanced pruning
-        constexpr int EXPERT = 9;   // Maximum strength
-    }
-
-    // ========== AI PLAYER ==========
-    // Chess engine with alpha-beta search and iterative deepening
-    // Uses transposition table, move ordering, and parallel search
-    class AIPlayer
-    {
-    public:
-        // Initialize AI with specified difficulty level
-        // Higher difficulty = deeper search + more aggressive pruning
-        AIPlayer(DifficultyLevel difficulty);
-
-        // Calculate best move for current position
-        // Uses iterative deepening with time management
-        // @param board: Current position to analyze
-        // @param maxTimeMs: Maximum thinking time in milliseconds
-        // @param maxDepth: Maximum search depth (0 = no limit)
-        // @return: Best move found within time limit
-        Move CalculateBestMove(const Board& board, int maxTimeMs = 5000, int maxDepth = 0);
-
-        // Update AI difficulty and transposition table size
-        void SetDifficulty(DifficultyLevel difficulty);
-        DifficultyLevel GetDifficulty() const { return m_difficulty; }
-
-        // Configure number of search threads (root-parallel search)
-        void SetThreads(int threads);
-
-        // Abort current search immediately
-        // Used when user stops analysis or game ends
-        void AbortSearch();
-
-        // Load NNUE network for neural evaluation
-        // @param filename: Path to .nnue file
-        // @return: true if loading succeeded
-        bool LoadNnue(const std::string& filename);
-
-        // Check if NNUE is available
-        bool IsNnueAvailable() const { return m_evaluator.IsNnueAvailable(); }
-
-        // Get evaluator for direct access
-        Neural::HybridEvaluator& GetEvaluator() { return m_evaluator; }
-		void SetEvalCacheSizeMB(int sizeMB);
-        void ClearEvalCache();
-
-    private:
-        DifficultyLevel m_difficulty;
-        std::chrono::steady_clock::time_point m_searchStartTime;
-        int m_maxSearchTimeMs;
-
-        // Transposition table for position caching
-        TranspositionTable m_transpositionTable;
-
-        static constexpr int MAX_PLY = 64;  // Maximum search depth
-
-        // Move ordering heuristics for main thread
-        Move m_killerMoves[MAX_PLY][2];     // Killer move heuristic
-        std::atomic<int> m_history[2][64][64];           // History heuristic (per side)
-        Move m_counterMoves[2][64][64];        // Countermove heuristic [side][from][to]   
-
-
-        int m_numThreads = 1;               // Parallel search threads
-        std::atomic<bool> m_abortSearch{false};  // Search abort flag
-
-        // NNUE evaluator (hybrid mode with classical fallback)
-        Neural::HybridEvaluator m_evaluator;
-
-        // Thread-local heuristics to prevent data races
-        struct ThreadLocalData {
-            Move killerMoves[MAX_PLY][2];
-
-            ThreadLocalData() {
-                for (int i = 0; i < MAX_PLY; ++i) {
-                    killerMoves[i][0] = Move();
-                    killerMoves[i][1] = Move();
-                }
-            }
-        };
-
-        // ========== SEARCH ALGORITHMS ==========
-        
-        // Alpha-beta negamax with pruning optimizations
-        // excludedMove: when set (IsValid()), that move is skipped in the loop (used for SE)
-        int AlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
-                      Move excludedMove = Move{});
-
-        // Quiescence search - tactical move resolution
-        int QuiescenceSearch(Board& board, int alpha, int beta, int ply, int qDepth);
-
-        // Worker thread search with thread-local data
-        // excludedMove: when set (IsValid()), that move is skipped in the loop (used for SE)
-        int WorkerAlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
-                            ThreadLocalData& tld, Move excludedMove = Move{});
-        int WorkerQuiescence(Board& board, int alpha, int beta, int ply, int qDepth,
-                             ThreadLocalData& tld);
-
-        // Check if search time limit exceeded
-        bool ShouldStop() const;
-
-        // ========== MOVE ORDERING ==========
-        // Better move ordering = more beta cutoffs = faster search
-        
-        void OrderMoves(MoveList& moves, const Board& board, Move ttMove, int ply);
-        int ScoreMove(const Move& move, const Board& board, Move ttMove, int ply);
-
-        void OrderMovesWorker(MoveList& moves, const Board& board, Move ttMove,
-                              int ply, const ThreadLocalData& tld);
-        int ScoreMoveWorker(const Move& move, const Board& board, Move ttMove, int ply,
-                            const ThreadLocalData& tld);
-		
-        void OrderMovesSimple(MoveList& moves, const Board& board, Move ttMove);
-
-		// Filter pseudo-legal moves to legal moves by verifying king safety
-        MoveList FilterLegalMoves(Board& board, const MoveList& pseudoMoves,
-                                  PlayerColor sideToMove, PlayerColor opponentColor);
-
-        // Static Exchange Evaluation - evaluate capture sequences
-        int SEE(const Board& board, const Move& move) const;
-        std::vector<int> GetSmallestAttacker(const std::array<Piece, SQUARE_COUNT>& pieces,
-                                             int square, PlayerColor attackerColor) const;
     };
 
     // ========== PGN GAME RECORD ==========

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="UI"><UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier></Filter>
@@ -10,6 +10,9 @@
   <ItemGroup>
     <ClCompile Include="UI\main.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ChessGame.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="Engine\Search.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\SearchWorker.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\MoveOrdering.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="UI\VectorRenderer.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\WinApp.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\Dialogs\PromotionDialog.cpp"><Filter>UI\Dialogs</Filter></ClCompile>
@@ -26,6 +29,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="UI\ChessGame.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="Engine\Search.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="UI\VectorRenderer.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\WinApp.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\Dialogs\PromotionDialog.h"><Filter>UI\Dialogs</Filter></ClInclude>

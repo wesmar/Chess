@@ -81,25 +81,25 @@ namespace Chess
                 g_bookEntries.push_back(entry);
             }
 
-			// Advance board to next position in the line
-			// Find the legal move matching from/to to get correct MoveType flags
-			// (capture, castle, en passant, etc.) for proper move execution
-			auto legalMoves = board.GenerateLegalMoves();
-			auto moveIt = std::find_if(legalMoves.begin(), legalMoves.end(),
-				[from, to](const Move& m) {
-					return m.GetFrom() == from && m.GetTo() == to;
-				});
+            // Advance board to next position in the line
+            // Find the legal move matching from/to to get correct MoveType flags
+            // (capture, castle, en passant, etc.) for proper move execution
+            auto legalMoves = board.GenerateLegalMoves();
+            auto moveIt = std::find_if(legalMoves.begin(), legalMoves.end(),
+                [from, to](const Move& m) {
+                    return m.GetFrom() == from && m.GetTo() == to;
+                });
 
-			if (moveIt == legalMoves.end())
-			{
-				break; // Invalid move sequence - stop processing this line
-			}
+            if (moveIt == legalMoves.end())
+            {
+                break; // Invalid move sequence - stop processing this line
+            }
 
-			// Use the fully-formed legal move with correct type flags
-			if (!board.MakeMove(*moveIt))
-			{
-				break; // Move execution failed - stop processing this line
-			}
+            // Use the fully-formed legal move with correct type flags
+            if (!board.MakeMove(*moveIt))
+            {
+                break; // Move execution failed - stop processing this line
+            }
         }
     }
 
@@ -114,7 +114,7 @@ namespace Chess
         g_bookEntries.clear();
         g_bookEntries.reserve(50); // Preallocate for ~50 unique positions
 
-		// Pre-calculate square indices for cleaner move notation
+        // Pre-calculate square indices for cleaner move notation
         // These are computed at compile time (constexpr)
         constexpr int e2 = AlgebraicToSquare('e', '2');
         constexpr int e4 = AlgebraicToSquare('e', '4');
@@ -149,291 +149,151 @@ namespace Chess
         // ========== 1.e4 OPENINGS ==========
 
         // Ruy Lopez (Spanish Game): 1.e4 e5 2.Nf3 Nc6 3.Bb5
-        // One of the oldest and most respected openings, aiming for long-term pressure
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e5},   // 1...e5
-            {g1, f3},   // 2.Nf3 - attacks e5 pawn
-            {b8, c6},   // 2...Nc6 - defends e5
-            {f1, b5}    // 3.Bb5 - pins knight, pressures center
+            {e2, e4}, {e7, e5}, {g1, f3}, {b8, c6}, {f1, b5}
         });
 
         // Italian Game: 1.e4 e5 2.Nf3 Nc6 3.Bc4
-        // Classical development aiming at f7 weakness
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e5},   // 1...e5
-            {g1, f3},   // 2.Nf3
-            {b8, c6},   // 2...Nc6
-            {f1, c4}    // 3.Bc4 - targets f7 square
+            {e2, e4}, {e7, e5}, {g1, f3}, {b8, c6}, {f1, c4}
         });
 
         // Sicilian Defense (Open Sicilian): 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4
-        // Most popular response to 1.e4 at master level, asymmetrical and fighting
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {c7, c5},   // 1...c5 - Sicilian Defense
-            {g1, f3},   // 2.Nf3
-            {d7, d6},   // 2...d6 - prepares ...Nf6
-            {d2, d4},   // 3.d4 - challenges center
-            {c5, d4},   // 3...cxd4
-            {f3, d4}    // 4.Nxd4 - Open Sicilian position
+            {e2, e4}, {c7, c5}, {g1, f3}, {d7, d6}, {d2, d4}, {c5, d4}, {f3, d4}
         });
 
         // French Defense: 1.e4 e6 2.d4 d5
-        // Solid but somewhat passive, leads to closed positions
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e6},   // 1...e6 - French Defense
-            {d2, d4},   // 2.d4
-            {d7, d5}    // 2...d5 - challenges e4 pawn
+            {e2, e4}, {e7, e6}, {d2, d4}, {d7, d5}
         });
 
         // Caro-Kann Defense: 1.e4 c6 2.d4 d5
-        // Solid defense similar to French but avoids blocked light-squared bishop
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {c7, c6},   // 1...c6 - Caro-Kann Defense
-            {d2, d4},   // 2.d4
-            {d7, d5}    // 2...d5 - challenges center with c6 support
+            {e2, e4}, {c7, c6}, {d2, d4}, {d7, d5}
         });
 
         // ========== 1.d4 OPENINGS ==========
 
         // Queen's Gambit: 1.d4 d5 2.c4
-        // Classic opening offering pawn sacrifice for central control
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {d7, d5},   // 1...d5
-            {c2, c4}    // 2.c4 - Queen's Gambit offered
+            {d2, d4}, {d7, d5}, {c2, c4}
         });
 
         // King's Indian Defense: 1.d4 Nf6 2.c4 g6 3.Nc3
-        // Hypermodern defense allowing White center then counterattacking
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {g8, f6},   // 1...Nf6 - Indian Defense
-            {c2, c4},   // 2.c4
-            {g7, g6},   // 2...g6 - King's Indian setup
-            {b1, c3}    // 3.Nc3
+            {d2, d4}, {g8, f6}, {c2, c4}, {g7, g6}, {b1, c3}
         });
 
-		// Giuoco Piano (Italian Game continuation): 1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 4.c3
-        // Classical setup with strong center control
+        // Giuoco Piano: 1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 4.c3
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e5},   // 1...e5
-            {g1, f3},   // 2.Nf3
-            {b8, c6},   // 2...Nc6
-            {f1, c4},   // 3.Bc4
-            {f8, c5},   // 3...Bc5
-            {c2, c3}    // 4.c3 - prepares d4 central thrust
+            {e2, e4}, {e7, e5}, {g1, f3}, {b8, c6}, {f1, c4}, {f8, c5}, {c2, c3}
         });
 
         // Nimzo-Indian Defense: 1.d4 Nf6 2.c4 e6 3.Nc3 Bb4
-        // Hypermodern defense with piece pressure on center
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {g8, f6},   // 1...Nf6
-            {c2, c4},   // 2.c4
-            {e7, e6},   // 2...e6
-            {b1, c3},   // 3.Nc3
-            {f8, b4}    // 3...Bb4 - pins knight
+            {d2, d4}, {g8, f6}, {c2, c4}, {e7, e6}, {b1, c3}, {f8, b4}
         });
 
         // Scotch Game: 1.e4 e5 2.Nf3 Nc6 3.d4
-        // Sharp tactical opening with early central tension
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e5},   // 1...e5
-            {g1, f3},   // 2.Nf3
-            {b8, c6},   // 2...Nc6
-            {d2, d4}    // 3.d4 - aggressive center break
+            {e2, e4}, {e7, e5}, {g1, f3}, {b8, c6}, {d2, d4}
         });
 
         // ========== ADDITIONAL OPENING LINES ==========
 
-        // Additional square definitions for new lines
-        constexpr int a3 = AlgebraicToSquare('a', '3');
         constexpr int a6 = AlgebraicToSquare('a', '6');
-        constexpr int b3 = AlgebraicToSquare('b', '3');
-        constexpr int b6 = AlgebraicToSquare('b', '6');
         constexpr int e3 = AlgebraicToSquare('e', '3');
-        constexpr int d3 = AlgebraicToSquare('d', '3');
-        constexpr int f4 = AlgebraicToSquare('f', '4');
         constexpr int f5 = AlgebraicToSquare('f', '5');
-        constexpr int h3 = AlgebraicToSquare('h', '3');
         constexpr int a7 = AlgebraicToSquare('a', '7');
 
-        // Sicilian Defense - Najdorf Variation: 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 a6
+        // Sicilian Najdorf: 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 a6
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {c7, c5},   // 1...c5
-            {g1, f3},   // 2.Nf3
-            {d7, d6},   // 2...d6
-            {d2, d4},   // 3.d4
-            {c5, d4},   // 3...cxd4
-            {f3, d4},   // 4.Nxd4
-            {g8, f6},   // 4...Nf6
-            {b1, c3},   // 5.Nc3
-            {a7, a6}    // 5...a6 - Najdorf move
+            {e2, e4}, {c7, c5}, {g1, f3}, {d7, d6}, {d2, d4}, {c5, d4},
+            {f3, d4}, {g8, f6}, {b1, c3}, {a7, a6}
         });
 
-        // Sicilian Defense - Dragon Variation: 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 g6
+        // Sicilian Dragon: 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 g6
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {c7, c5},   // 1...c5
-            {g1, f3},   // 2.Nf3
-            {d7, d6},   // 2...d6
-            {d2, d4},   // 3.d4
-            {c5, d4},   // 3...cxd4
-            {f3, d4},   // 4.Nxd4
-            {g8, f6},   // 4...Nf6
-            {b1, c3},   // 5.Nc3
-            {g7, g6}    // 5...g6 - Dragon setup
+            {e2, e4}, {c7, c5}, {g1, f3}, {d7, d6}, {d2, d4}, {c5, d4},
+            {f3, d4}, {g8, f6}, {b1, c3}, {g7, g6}
         });
 
-        // French Defense - Winawer Variation: 1.e4 e6 2.d4 d5 3.Nc3 Bb4
+        // French Winawer: 1.e4 e6 2.d4 d5 3.Nc3 Bb4
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e6},   // 1...e6
-            {d2, d4},   // 2.d4
-            {d7, d5},   // 2...d5
-            {b1, c3},   // 3.Nc3
-            {f8, b4}    // 3...Bb4 - Winawer
+            {e2, e4}, {e7, e6}, {d2, d4}, {d7, d5}, {b1, c3}, {f8, b4}
         });
 
-        // French Defense - Classical Variation: 1.e4 e6 2.d4 d5 3.Nc3 Nf6
+        // French Classical: 1.e4 e6 2.d4 d5 3.Nc3 Nf6
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {e7, e6},   // 1...e6
-            {d2, d4},   // 2.d4
-            {d7, d5},   // 2...d5
-            {b1, c3},   // 3.Nc3
-            {g8, f6}    // 3...Nf6 - Classical
+            {e2, e4}, {e7, e6}, {d2, d4}, {d7, d5}, {b1, c3}, {g8, f6}
         });
 
-        // Caro-Kann Defense - Classical Variation: 1.e4 c6 2.d4 d5 3.Nc3 dxe4 4.Nxe4 Bf5
+        // Caro-Kann Classical: 1.e4 c6 2.d4 d5 3.Nc3 dxe4 4.Nxe4 Bf5
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {c7, c6},   // 1...c6
-            {d2, d4},   // 2.d4
-            {d7, d5},   // 2...d5
-            {b1, c3},   // 3.Nc3
-            {d5, e4},   // 3...dxe4
-            {c3, e4},   // 4.Nxe4
-            {c8, f5}    // 4...Bf5 - Classical development
+            {e2, e4}, {c7, c6}, {d2, d4}, {d7, d5}, {b1, c3}, {d5, e4},
+            {c3, e4}, {c8, f5}
         });
 
-        // Caro-Kann Defense - Advance Variation: 1.e4 c6 2.d4 d5 3.e5 Bf5
+        // Caro-Kann Advance: 1.e4 c6 2.d4 d5 3.e5 Bf5
         AddBookLine({
-            {e2, e4},   // 1.e4
-            {c7, c6},   // 1...c6
-            {d2, d4},   // 2.d4
-            {d7, d5},   // 2...d5
-            {e4, e5},   // 3.e5 - Advance
-            {c8, f5}    // 3...Bf5 - Standard response
+            {e2, e4}, {c7, c6}, {d2, d4}, {d7, d5}, {e4, e5}, {c8, f5}
         });
 
         // Slav Defense: 1.d4 d5 2.c4 c6
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {d7, d5},   // 1...d5
-            {c2, c4},   // 2.c4
-            {c7, c6}    // 2...c6 - Slav
+            {d2, d4}, {d7, d5}, {c2, c4}, {c7, c6}
         });
 
-        // Slav Defense - Main Line: 1.d4 d5 2.c4 c6 3.Nf3 Nf6 4.Nc3 dxc4
+        // Slav Main Line: 1.d4 d5 2.c4 c6 3.Nf3 Nf6 4.Nc3 dxc4
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {d7, d5},   // 1...d5
-            {c2, c4},   // 2.c4
-            {c7, c6},   // 2...c6
-            {g1, f3},   // 3.Nf3
-            {g8, f6},   // 3...Nf6
-            {b1, c3},   // 4.Nc3
-            {d5, c4}    // 4...dxc4
+            {d2, d4}, {d7, d5}, {c2, c4}, {c7, c6}, {g1, f3}, {g8, f6},
+            {b1, c3}, {d5, c4}
         });
 
-        // Nimzo-Indian Defense - Rubinstein Variation: 1.d4 Nf6 2.c4 e6 3.Nc3 Bb4 4.e3
+        // Nimzo-Indian Rubinstein: 1.d4 Nf6 2.c4 e6 3.Nc3 Bb4 4.e3
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {g8, f6},   // 1...Nf6
-            {c2, c4},   // 2.c4
-            {e7, e6},   // 2...e6
-            {b1, c3},   // 3.Nc3
-            {f8, b4},   // 3...Bb4
-            {e2, e3}    // 4.e3 - Rubinstein
+            {d2, d4}, {g8, f6}, {c2, c4}, {e7, e6}, {b1, c3}, {f8, b4}, {e2, e3}
         });
 
-        // Nimzo-Indian Defense - Classical Variation: 1.d4 Nf6 2.c4 e6 3.Nc3 Bb4 4.Qc2
+        // Nimzo-Indian Classical: 1.d4 Nf6 2.c4 e6 3.Nc3 Bb4 4.Qc2
         constexpr int d1 = AlgebraicToSquare('d', '1');
         constexpr int c2_sq = AlgebraicToSquare('c', '2');
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {g8, f6},   // 1...Nf6
-            {c2, c4},   // 2.c4
-            {e7, e6},   // 2...e6
-            {b1, c3},   // 3.Nc3
-            {f8, b4},   // 3...Bb4
-            {d1, c2_sq} // 4.Qc2 - Classical
+            {d2, d4}, {g8, f6}, {c2, c4}, {e7, e6}, {b1, c3}, {f8, b4}, {d1, c2_sq}
         });
 
         // English Opening: 1.c4
         AddBookLine({
-            {c2, c4}    // 1.c4 - English Opening
+            {c2, c4}
         });
 
-        // English Opening - Symmetrical: 1.c4 c5 2.Nc3 Nc6 3.g3
+        // English Symmetrical: 1.c4 c5 2.Nc3 Nc6 3.g3
         constexpr int g2 = AlgebraicToSquare('g', '2');
         constexpr int g3_sq = AlgebraicToSquare('g', '3');
         AddBookLine({
-            {c2, c4},   // 1.c4
-            {c7, c5},   // 1...c5
-            {b1, c3},   // 2.Nc3
-            {b8, c6},   // 2...Nc6
-            {g2, g3_sq} // 3.g3 - Fianchetto setup
+            {c2, c4}, {c7, c5}, {b1, c3}, {b8, c6}, {g2, g3_sq}
         });
 
-        // English Opening - Reversed Sicilian: 1.c4 e5 2.Nc3 Nf6 3.Nf3
+        // English Reversed Sicilian: 1.c4 e5 2.Nc3 Nf6 3.Nf3
         AddBookLine({
-            {c2, c4},   // 1.c4
-            {e7, e5},   // 1...e5
-            {b1, c3},   // 2.Nc3
-            {g8, f6},   // 2...Nf6
-            {g1, f3}    // 3.Nf3
+            {c2, c4}, {e7, e5}, {b1, c3}, {g8, f6}, {g1, f3}
         });
 
         // Queen's Gambit Declined: 1.d4 d5 2.c4 e6 3.Nc3 Nf6
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {d7, d5},   // 1...d5
-            {c2, c4},   // 2.c4
-            {e7, e6},   // 2...e6 - QGD
-            {b1, c3},   // 3.Nc3
-            {g8, f6}    // 3...Nf6
+            {d2, d4}, {d7, d5}, {c2, c4}, {e7, e6}, {b1, c3}, {g8, f6}
         });
 
         // Queen's Gambit Accepted: 1.d4 d5 2.c4 dxc4 3.Nf3 Nf6
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {d7, d5},   // 1...d5
-            {c2, c4},   // 2.c4
-            {d5, c4},   // 2...dxc4 - QGA
-            {g1, f3},   // 3.Nf3
-            {g8, f6}    // 3...Nf6
+            {d2, d4}, {d7, d5}, {c2, c4}, {d5, c4}, {g1, f3}, {g8, f6}
         });
 
-        // King's Indian Defense - Classical: 1.d4 Nf6 2.c4 g6 3.Nc3 Bg7 4.e4 d6
+        // King's Indian Classical: 1.d4 Nf6 2.c4 g6 3.Nc3 Bg7 4.e4 d6
         AddBookLine({
-            {d2, d4},   // 1.d4
-            {g8, f6},   // 1...Nf6
-            {c2, c4},   // 2.c4
-            {g7, g6},   // 2...g6
-            {b1, c3},   // 3.Nc3
-            {f8, g7},   // 3...Bg7
-            {e2, e4},   // 4.e4
-            {d7, d6}    // 4...d6
+            {d2, d4}, {g8, f6}, {c2, c4}, {g7, g6}, {b1, c3}, {f8, g7},
+            {e2, e4}, {d7, d6}
         });
 
         g_bookInitialized = true;

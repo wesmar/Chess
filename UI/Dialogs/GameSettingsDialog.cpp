@@ -7,6 +7,7 @@
 #include <commctrl.h>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 namespace Chess
 {

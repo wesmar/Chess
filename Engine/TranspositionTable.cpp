@@ -1,229 +1,199 @@
 // TranspositionTable.cpp
-// Hash table implementation for caching chess position evaluations
+// Lock-free transposition table implementation.
 //
-// The transposition table (TT) is a critical optimization for chess engines.
-// It stores previously evaluated positions to avoid re-searching identical positions
-// that can be reached through different move orders (transpositions).
+// Concurrency model: Hyatt XOR-key validation.
+//   - Each entry holds (keyXorData, data) as two 64-bit atomics.
+//   - Writer stores data first, then keyXorData = key XOR data.
+//   - Reader loads both, computes loadedKeyXorData XOR loadedData = recoveredKey.
+//   - If recoveredKey matches the queried key, the entry is consistent and
+//     refers to that position. Any concurrent interleaving produces a mismatch
+//     and is treated as a miss.
 //
-// Key concepts:
-// - ZOBRIST HASHING: Each position has unique 64-bit hash key
-// - REPLACEMENT STRATEGY: Always-replace with depth preference
-// - BOUND TYPES: Exact scores, alpha bounds (upper), beta bounds (lower)
-// - MATE SCORE ADJUSTMENT: Store mate distance from root, not current position
-// - THREAD SAFETY: Striped locking for concurrent access
+// Memory ordering: relaxed is sufficient. We do not need synchronization-with
+// semantics — the XOR check IS the validity check. On x86 all aligned 8-byte
+// stores are atomic; on weaker archs the std::atomic<uint64_t> guarantees it.
 //
-// Performance impact:
-// - Reduces search tree by 10-100x in typical positions
-// - Stores best move for move ordering (PV move first)
-// - Essential for iterative deepening to work effectively
-//
-// Memory usage:
-// - Each entry: 32 bytes (key + score + depth + flags + move)
-// - Typical size: 16-256 MB (500K - 8M entries)
+// Cache model: 4-way buckets aligned to 64-byte cache lines. One probe or
+// store touches exactly one line. See header for replacement policy.
 
 #include "TranspositionTable.h"
 
+#include <cstring>
+#include <cstdlib>
+#include <climits>
+
 namespace Chess
 {
-    // Constructor - initialize with default size
-    // Default 16 MB provides good performance without excessive memory use
     TranspositionTable::TranspositionTable()
-        : m_size(0)
     {
-        Resize(16); // Default 16 MB
+        Resize(16);  // Default 16 MB
     }
 
-    // Resize transposition table to specified size in megabytes
-    // This function is called only during initialization or between games
-    // Never called during active search (guaranteed by AIPlayer)
-    //
-    // Uses power-of-2 sizing for efficient modulo operations:
-    // index = hash & (size - 1) is faster than hash % size
     void TranspositionTable::Resize(size_t sizeInMB)
     {
-        // Calculate number of entries that fit in requested memory
-        size_t numEntries = (sizeInMB * 1024 * 1024) / sizeof(TTEntry);
+        size_t numBuckets = (sizeInMB * 1024ULL * 1024ULL) / sizeof(Bucket);
+        if (numBuckets < 2) numBuckets = 2;
 
-        // Round down to nearest power of 2 for efficient indexing
-        // This allows using bitwise AND instead of modulo for hash indexing
         size_t powerOf2 = 1;
-        while (powerOf2 * 2 <= numEntries)
-        {
+        while (powerOf2 * 2 <= numBuckets)
             powerOf2 *= 2;
-        }
 
-        m_size = powerOf2;
-        m_entries.resize(m_size);
-
-        // Initialize all entries to empty state
-        for (auto& entry : m_entries)
-        {
-            entry.key = 0;
-            entry.score = 0;
-            entry.depth = 0;
-            entry.flag = TT_EXACT;
-            entry.bestMove = Move();
-        }
+        m_numBuckets = powerOf2;
+        // alignas(64) on Bucket makes new[] return cache-line-aligned storage (C++17)
+        m_buckets = std::unique_ptr<Bucket[]>(new Bucket[m_numBuckets]);
+        Clear();
     }
 
-    // Clear all entries in the transposition table
-    // Called at start of new game or when position is reset
-    // NOT thread-safe - must only be called when no search is active
     void TranspositionTable::Clear()
     {
-        for (auto& entry : m_entries)
+        if (!m_buckets) return;
+        for (size_t i = 0; i < m_numBuckets; ++i)
         {
-            entry.key = 0;
-            entry.score = 0;
-            entry.depth = 0;
-            entry.flag = TT_EXACT;
-            entry.bestMove = Move();
+            for (int j = 0; j < BUCKET_SIZE; ++j)
+            {
+                m_buckets[i].entries[j].keyXorData.store(0, std::memory_order_relaxed);
+                m_buckets[i].entries[j].data.store(0, std::memory_order_relaxed);
+            }
         }
     }
 
-    // Probe transposition table for cached position evaluation
-    // Returns true if usable entry found, false otherwise
-    //
-    // Entry is usable if:
-    // 1. Hash key matches (same position)
-    // 2. Search depth is sufficient (depth >= requested depth)
-    // 3. Bound type is applicable to current alpha/beta window
-    //
-    // Parameters:
-    // - key: Zobrist hash of position
-    // - depth: Minimum search depth required
-    // - alpha, beta: Current search window
-    // - outScore: [out] Cached score if entry usable
-    // - outBestMove: [out] Best move from cached search
-    // - ply: Distance from root (for mate score adjustment)
-    //
-    // Returns: true if cache hit with usable data
-    bool TranspositionTable::Probe(uint64_t key, int depth, int alpha, int beta, 
+    bool TranspositionTable::Probe(uint64_t key, int depth, int alpha, int beta,
                                     int& outScore, Move& outBestMove, int ply)
     {
-        size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
-        size_t lockIdx = GetLockIndex(index);
-
-        // Lock this entry's stripe for thread-safe access
-        std::lock_guard<std::mutex> lock(m_mutexes[lockIdx]);
-        TTEntry& entry = m_entries[index];
-
-        // Check if entry matches current position
-        if (entry.key != key)
-            return false; // Hash collision or empty entry
-
-        // Always return best move for move ordering even if depth insufficient
-        outBestMove = entry.bestMove;
-
-        // Only use cached score if search depth is sufficient
-        // Shallow searches can't replace deep searches
-        if (entry.depth < depth)
+        uint64_t data;
+        if (!FindEntry(key, data))
             return false;
 
-        int score = entry.score;
+        int storedScore;
+        int storedDepth;
+        uint8_t flag;
+        Move move;
+        UnpackData(data, storedScore, storedDepth, flag, move);
 
-        // Adjust mate scores from table perspective to current position perspective
-        // Mate scores are stored relative to root, must adjust for current ply
-        // This ensures mate-in-N is correctly represented at any point in search tree
-        if (score > 28000) // Mate score for us
-            score -= ply;  // Closer to mate at deeper ply
-        else if (score < -28000) // Mate score for opponent
-            score += ply;  // Further from mate at deeper ply
+        // Always return best move (when key matches) for move ordering.
+        outBestMove = move;
 
-        // Check if cached bound type is useful for current search window
-        
-        // Exact score from previous search at this depth
-        if (entry.flag == TT_EXACT)
+        if (storedDepth < depth)
+            return false;
+
+        // Adjust mate-distance scores back to current-ply-relative.
+        // Mirror the storage criterion: only genuine mate window gets adjusted.
+        constexpr int MATE = 29000;
+        constexpr int MATE_IN_MAX_PLY = MATE - 250;
+        if (storedScore >= MATE_IN_MAX_PLY && storedScore <= MATE + 250)
+            storedScore -= ply;
+        else if (storedScore <= -MATE_IN_MAX_PLY && storedScore >= -MATE - 250)
+            storedScore += ply;
+
+        if (flag == TT_EXACT)
         {
-            outScore = score;
+            outScore = storedScore;
             return true;
         }
-
-        // Upper bound (fail-low) - actual score <= cached score
-        // Useful if cached score <= alpha (confirms fail-low)
-        if (entry.flag == TT_ALPHA && score <= alpha)
+        if (flag == TT_ALPHA && storedScore <= alpha)
         {
-            outScore = score;
+            outScore = storedScore;
             return true;
         }
-
-        // Lower bound (fail-high) - actual score >= cached score
-        // Useful if cached score >= beta (confirms fail-high)
-        if (entry.flag == TT_BETA && score >= beta)
+        if (flag == TT_BETA && storedScore >= beta)
         {
-            outScore = score;
+            outScore = storedScore;
             return true;
         }
-
-        return false; // Bound type not useful for current window
+        return false;
     }
 
-    // Store position evaluation in transposition table
-    // Uses always-replace with depth-preferred strategy
-    //
-    // Parameters:
-    // - key: Zobrist hash of position
-    // - depth: Search depth at which position was evaluated
-    // - score: Evaluation score (from side-to-move perspective)
-    // - flag: Bound type (TT_EXACT, TT_ALPHA, TT_BETA)
-    // - bestMove: Best move found in this position
-    // - ply: Distance from root (for mate score adjustment)
-    //
-    // Replacement strategy:
-    // - Always replace if entry is empty (key == 0)
-    // - Always replace if new search is deeper (depth >= old depth)
-    // - This prefers keeping deeply-searched positions over shallow ones
-    void TranspositionTable::Store(uint64_t key, int depth, int score, 
-                                    uint8_t flag, Move bestMove, int ply)
-    {
-        size_t index = key & (m_size - 1); // Fast modulo using bitwise AND
-        size_t lockIdx = GetLockIndex(index);
-
-        // Lock this entry's stripe for thread-safe access
-        std::lock_guard<std::mutex> lock(m_mutexes[lockIdx]);
-        TTEntry& entry = m_entries[index];
-
-        // Replace-by-depth strategy: prefer deeper searches
-        // Empty entries (key == 0) are always replaced
-        // Existing entries only replaced if new search is deeper
-        if (entry.key == 0 || depth >= entry.depth)
-        {
-            int scoreToStore = score;
-
-            // Adjust mate scores from current position to root perspective
-            // Store mate distance from root so it's consistent across tree
-            if (score > 28000) // Mate score for us
-                scoreToStore += ply;  // Store as "mate in N from root"
-            else if (score < -28000) // Mate score for opponent
-                scoreToStore -= ply;  // Store as "mated in N from root"
-
-            // Write new entry
-            entry.key = key;
-            entry.depth = static_cast<int16_t>(depth);
-            entry.score = scoreToStore;
-            entry.flag = flag;
-            entry.bestMove = bestMove;
-        }
-        // Otherwise keep existing entry (deeper search already cached)
-    }
-
-    // Probe for any matching entry regardless of depth or flag constraints
-    // Used by Singular Extensions: we need a reference score for the TT move
-    // without the usual depth/bound-type filtering that would discard valid SE info.
-    // Thread-safe via striped locking.
     bool TranspositionTable::ProbeSE(uint64_t key, int& outScore, Move& outBestMove)
     {
-        size_t index = key & (m_size - 1);
-        size_t lockIdx = GetLockIndex(index);
-
-        std::lock_guard<std::mutex> lock(m_mutexes[lockIdx]);
-        const TTEntry& entry = m_entries[index];
-
-        if (entry.key != key)
+        uint64_t data;
+        if (!FindEntry(key, data))
             return false;
 
-        outScore = entry.score;
-        outBestMove = entry.bestMove;
+        int storedScore, storedDepth;
+        uint8_t flag;
+        Move move;
+        UnpackData(data, storedScore, storedDepth, flag, move);
+
+        outScore = storedScore;
+        outBestMove = move;
         return true;
+    }
+
+    void TranspositionTable::Store(uint64_t key, int depth, int score,
+                                    uint8_t flag, Move bestMove, int ply)
+    {
+        Bucket& bucket = m_buckets[key & (m_numBuckets - 1)];
+
+        // Replacement policy, in priority order:
+        //   1. Same position already stored -> refresh that slot (unless the
+        //      existing entry is strictly deeper and we bring nothing new).
+        //   2. Empty slot.
+        //   3. Shallowest entry in the bucket (always replaced - keeps the
+        //      table fresh across long games without a separate aging field).
+        Entry* victim = nullptr;
+        int victimDepth = INT_MAX;
+
+        for (int i = 0; i < BUCKET_SIZE; ++i)
+        {
+            Entry& e = bucket.entries[i];
+            uint64_t kxd = e.keyXorData.load(std::memory_order_relaxed);
+            uint64_t data = e.data.load(std::memory_order_relaxed);
+
+            if (kxd == 0 && data == 0)
+            {
+                // Empty slot - use it unless we find a key match later
+                if (victimDepth > -1)
+                {
+                    victim = &e;
+                    victimDepth = -1;
+                }
+                continue;
+            }
+
+            if ((kxd ^ data) == key)
+            {
+                // Same position: keep the deeper of the two entries
+                int existingDepth = static_cast<int>((data >> 48) & 0xFFULL);
+                if (existingDepth > depth)
+                    return;
+                victim = &e;
+                break;
+            }
+
+            int entryDepth = static_cast<int>((data >> 48) & 0xFFULL);
+            if (entryDepth < victimDepth)
+            {
+                victim = &e;
+                victimDepth = entryDepth;
+            }
+        }
+
+        // Score canonicalization for TT storage:
+        //   - True mate scores (|s| in [MATE-250, MATE]) get +/-ply adjustment
+        //     so they encode "mate-distance from root" not "from current ply".
+        //   - Scores above MATE (e.g. fail-hard returning beta=INFINITY at the
+        //     root of an aspiration search) are NOT real mates. Cap them to
+        //     MATE-251 so they don't poison future probes by hijacking search
+        //     with bogus mate-class evaluations.
+        constexpr int MATE = 29000;
+        constexpr int MATE_IN_MAX_PLY = MATE - 250;
+
+        int scoreToStore = score;
+        if (score > MATE)
+            scoreToStore = MATE_IN_MAX_PLY - 1;          // fail-hard overshoot
+        else if (score >= MATE_IN_MAX_PLY)
+            scoreToStore = score + ply;                  // real mate-for-us
+        else if (score < -MATE)
+            scoreToStore = -(MATE_IN_MAX_PLY - 1);       // fail-hard overshoot
+        else if (score <= -MATE_IN_MAX_PLY)
+            scoreToStore = score - ply;                  // real mate-against-us
+
+        uint64_t packed = PackData(scoreToStore, depth, flag, bestMove);
+
+        // Store data first, then key^data. Order is not strictly required by
+        // the XOR-check protocol (any interleaving fails validation) but writing
+        // data first means a reader is more likely to see a consistent entry.
+        victim->data.store(packed, std::memory_order_relaxed);
+        victim->keyXorData.store(key ^ packed, std::memory_order_relaxed);
     }
 }

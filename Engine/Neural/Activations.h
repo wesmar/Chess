@@ -145,19 +145,20 @@ namespace Neural
     }
 
     // Combine two perspectives with squared ReLU for network input
-    // Processes both white and black accumulator perspectives
-    // @param accWhite: White perspective accumulator (int16)
-    // @param accBlack: Black perspective accumulator (int16)
-    // @param output: Combined output for dense layer input
+    // Convention: STM perspective first, opponent second.
+    // Caller is responsible for passing accumulators in the correct order.
+    // @param accStm: Side-to-move perspective accumulator (int16)
+    // @param accOpp: Opponent perspective accumulator (int16)
+    // @param output: Combined output for dense layer input [halfDim * 2]
     // @param halfDim: Size of each perspective (e.g., 128)
-    inline void CombinePerspectives(const int16_t* accWhite, const int16_t* accBlack,
+    inline void CombinePerspectives(const int16_t* accStm, const int16_t* accOpp,
                                      uint8_t* output, int halfDim)
     {
-        // First half: white perspective with squared ReLU
-        ApplySquaredClampedRelu(accWhite, output, halfDim);
+        // First half: side-to-move perspective with squared ReLU
+        ApplySquaredClampedRelu(accStm, output, halfDim);
 
-        // Second half: black perspective with squared ReLU
-        ApplySquaredClampedRelu(accBlack, output + halfDim, halfDim);
+        // Second half: opponent perspective with squared ReLU
+        ApplySquaredClampedRelu(accOpp, output + halfDim, halfDim);
     }
 
     // Pairwise product of activations (used in some architectures)

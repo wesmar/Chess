@@ -332,6 +332,9 @@ namespace Chess
         record.previousZobristKey = m_zobristKey;
         record.previousIncrementalScore = m_incrementalScore;
         record.previousEGScore = m_egScore;
+        record.previousAllOccupied = m_allOccupied;
+        record.previousPawnMasks[0] = m_pawnMasks[0];
+        record.previousPawnMasks[1] = m_pawnMasks[1];
 
         const int from = move.GetFrom();
         const int to = move.GetTo();
@@ -565,7 +568,8 @@ namespace Chess
             return false; // No moves to undo
         }
 
-        MoveRecord record = m_moveHistory[--m_historyPly];
+        // Reference, not copy - the record is ~80 bytes and read-only here
+        const MoveRecord& record = m_moveHistory[--m_historyPly];
 
         // Switch side back
         m_sideToMove = (m_sideToMove == PlayerColor::White)
@@ -639,8 +643,12 @@ namespace Chess
             m_fullMoveNumber--;
         }
 
-        // Rebuild occupancy bitboard
-        RebuildOccupancy();
+        // Snapshot-restore of occupancy: O(1) instead of the 64-square
+        // RebuildOccupancy scan. The snapshot lives in the same MoveRecord
+        // that is already being read - no extra cache lines touched.
+        m_allOccupied = record.previousAllOccupied;
+        m_pawnMasks[0] = record.previousPawnMasks[0];
+        m_pawnMasks[1] = record.previousPawnMasks[1];
 
         return true;
     }

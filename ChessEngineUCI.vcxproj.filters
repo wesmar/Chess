@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Engine"><UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier></Filter>
@@ -7,7 +7,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="UCI\UCIMain.cpp"><Filter>UCI</Filter></ClCompile>
-    <ClCompile Include="UI\ChessGame.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="Engine\Search.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\SearchWorker.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Engine\MoveOrdering.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\Board.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\MoveGenerator.cpp"><Filter>Engine</Filter></ClCompile>
     <ClCompile Include="Engine\OpeningBook.cpp"><Filter>Engine</Filter></ClCompile>
@@ -18,7 +20,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="UCI\UCIEngine.h"><Filter>UCI</Filter></ClInclude>
-    <ClInclude Include="UI\ChessGame.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="Engine\Search.h"><Filter>Engine</Filter></ClInclude>
 	<ClInclude Include="UI\LangManager.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Engine\Board.h"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="Engine\ChessConstants.h"><Filter>Engine</Filter></ClInclude>

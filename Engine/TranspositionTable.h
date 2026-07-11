@@ -1,108 +1,139 @@
 // TranspositionTable.h
-// Hash table for caching position evaluations with Zobrist keys
-// Stores search results to avoid re-analyzing transpositions
+// Lock-free hash table for caching position evaluations.
+//
+// Uses Hyatt's XOR-key validation trick: each entry is a pair of 64-bit atomics
+// (keyXorData, data). On store, write data first then key^data. On probe, the
+// reader XORs the loaded keyXorData with the loaded data to recover the original
+// key. If a concurrent writer interleaved with the read, the recovered key will
+// not match the query key and the probe is treated as a miss.
+//
+// This eliminates mutex contention entirely. Each probe is two relaxed atomic
+// loads + a XOR; each store is two relaxed atomic stores.
+//
+// Cache layout: entries are grouped into 64-byte buckets of 4 (one cache line).
+// A probe touches exactly one cache line regardless of which of the 4 ways the
+// entry lives in, and the 4-way associativity greatly reduces replacement
+// collisions compared to a direct-mapped table.
+//
+// Layout (per entry, 16 bytes):
+//   keyXorData : uint64_t   = zobristKey XOR packedData
+//   packedData : uint64_t   = move(32) | score(16) | depth(8) | flag(8)
+//
+// Score range fits in int16_t (chess scores within ±32000, mate scores ±29000).
+// Depth range fits in uint8_t (max search depth in practice well under 128).
 #pragma once
 
 #include "Move.h"
 #include <cstdint>
-#include <vector>
-#include <mutex>
-#include <array>
+#include <memory>
+#include <atomic>
+#include <intrin.h>
 
 namespace Chess
 {
-    // ========== TRANSPOSITION TABLE ENTRY FLAGS ==========
-    // Indicate type of bound stored for alpha-beta search
     enum TTFlag : uint8_t
     {
-        TT_EXACT = 0,  // Exact score (PV node - searched with full window)
-        TT_ALPHA = 1,  // Upper bound (all-node - failed low, score <= alpha)
-        TT_BETA = 2    // Lower bound (cut-node - failed high, score >= beta)
+        TT_EXACT = 0,  // Exact score from full-window search
+        TT_ALPHA = 1,  // Upper bound: real score <= stored score
+        TT_BETA  = 2   // Lower bound: real score >= stored score
     };
 
-    // ========== TRANSPOSITION TABLE ENTRY ==========
-    // Single cached position evaluation (32 bytes)
-    // Stores position hash, score, depth, bound type, and best move
-    struct TTEntry
-    {
-        uint64_t key = 0;       // Zobrist hash key for position verification
-        int score = 0;          // Evaluation score (from side-to-move perspective)
-        int16_t depth = 0;      // Search depth at which position was evaluated
-        uint8_t flag = TT_EXACT; // Bound type (exact, alpha, beta)
-        Move bestMove;          // Best move found during search
-    };
-
-    // ========== TRANSPOSITION TABLE ==========
-    // Hash table for storing position evaluations
-    // Uses always-replace with depth-preferred strategy
-    // Thread-safe with striped locking for concurrent access
     class TranspositionTable
     {
     public:
-        // Constructor - initializes with default 16 MB size
         TranspositionTable();
+        ~TranspositionTable() = default;
 
-        // Resize table to specified size in megabytes
-        // Clears all entries during resize
-        // Size is rounded down to nearest power of 2 for efficient indexing
-        // Typical sizes: 16 MB (beginner), 64 MB (intermediate), 256 MB (advanced)
+        // Resize to specified size in MB. Rounds down to nearest power of 2 buckets.
         void Resize(size_t sizeInMB);
 
-        // Clear all entries in table
-        // Called at start of new game or position reset
-        // NOT thread-safe - must be called when no search is active
+        // Zero all entries. Caller must ensure no concurrent searches.
         void Clear();
 
-        // Probe table for cached position evaluation
-        // Returns true if usable entry found, false otherwise
-        // @param key: Zobrist hash of position
-        // @param depth: Minimum search depth required
-        // @param alpha: Current alpha bound (lower bound)
-        // @param beta: Current beta bound (upper bound)
-        // @param outScore: [out] Cached score if entry usable
-        // @param outBestMove: [out] Best move from cached search (always returned for move ordering)
-        // @param ply: Distance from root (for mate score adjustment)
-        // @return: true if cache hit with usable score, false otherwise
-        //
-        // Entry is usable if:
-        // 1. Hash key matches (same position)
-        // 2. Search depth is sufficient (depth >= requested depth)
-        // 3. Bound type is applicable to current alpha/beta window
-        bool Probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove, int ply);
+        // Probe with depth/bound filtering. Always writes outBestMove if key matches
+        // (for move ordering), returns true only if cached score is usable.
+        bool Probe(uint64_t key, int depth, int alpha, int beta,
+                   int& outScore, Move& outBestMove, int ply);
 
-        // Store position evaluation in table
-        // Uses always-replace with depth-preferred strategy:
-        // - Always replaces empty entries (key == 0)
-        // - Replaces existing entries only if new search is deeper or equal depth
-        // @param key: Zobrist hash of position
-        // @param depth: Search depth at which position was evaluated
-        // @param score: Evaluation score (from side-to-move perspective)
-        // @param flag: Bound type (TT_EXACT, TT_ALPHA, TT_BETA)
-        // @param bestMove: Best move found in this position
-        // @param ply: Distance from root (for mate score adjustment)
-        //
-        // Mate scores are adjusted to be stored relative to root position
-        // This ensures mate-in-N is correctly represented at any search depth
-        void Store(uint64_t key, int depth, int score, uint8_t flag, Move bestMove, int ply);
-
-        // Probe table for any matching entry regardless of depth/flag constraints
-        // Used by Singular Extensions to retrieve a reference score for the TT move
-        // Returns true if key matches (any entry), outputs raw score and best move
+        // Unconditional probe: returns any match regardless of depth/bound.
+        // Used by Singular Extensions for reference score retrieval.
         bool ProbeSE(uint64_t key, int& outScore, Move& outBestMove);
 
+        // Store with in-bucket replacement (key match > empty slot > shallowest).
+        void Store(uint64_t key, int depth, int score, uint8_t flag,
+                   Move bestMove, int ply);
+
+        // Prefetch the bucket for a position into L1. Call right after making a
+        // move so the line is resident by the time the child node probes it.
+        void Prefetch(uint64_t key) const noexcept
+        {
+            if (m_buckets)
+            {
+                _mm_prefetch(reinterpret_cast<const char*>(
+                    &m_buckets[key & (m_numBuckets - 1)]), _MM_HINT_T0);
+            }
+        }
+
     private:
-        std::vector<TTEntry> m_entries;  // Entry storage array
-        size_t m_size;                   // Number of entries (power of 2)
+        struct Entry
+        {
+            std::atomic<uint64_t> keyXorData{0};
+            std::atomic<uint64_t> data{0};
+        };
 
-        // Striped locking for concurrent access
-        // Multiple mutexes reduce contention in multi-threaded search
-        static constexpr size_t NUM_LOCKS = 128;  // Power of 2 for fast modulo
-        std::array<std::mutex, NUM_LOCKS> m_mutexes;
+        static constexpr int BUCKET_SIZE = 4;
 
-        // Get lock index from entry index for striped locking
-        // Uses bitwise AND for fast modulo operation
-        size_t GetLockIndex(size_t entryIndex) const {
-            return entryIndex & (NUM_LOCKS - 1);
+        // One bucket == one 64-byte cache line
+        struct alignas(64) Bucket
+        {
+            Entry entries[BUCKET_SIZE];
+        };
+        static_assert(sizeof(Bucket) == 64, "Bucket must be exactly one cache line");
+
+        std::unique_ptr<Bucket[]> m_buckets;
+        size_t m_numBuckets = 0;  // Always a power of 2
+
+        static constexpr uint64_t PackData(int score, int depth, uint8_t flag, Move move) noexcept
+        {
+            uint32_t mvRaw = move.GetRawData();
+            uint16_t s16 = static_cast<uint16_t>(static_cast<int16_t>(
+                score < -32000 ? -32000 : (score > 32000 ? 32000 : score)));
+            uint8_t d8 = static_cast<uint8_t>(
+                depth < 0 ? 0 : (depth > 255 ? 255 : depth));
+            return static_cast<uint64_t>(mvRaw)
+                 | (static_cast<uint64_t>(s16) << 32)
+                 | (static_cast<uint64_t>(d8) << 48)
+                 | (static_cast<uint64_t>(flag) << 56);
+        }
+
+        static void UnpackData(uint64_t data, int& score, int& depth,
+                               uint8_t& flag, Move& move) noexcept
+        {
+            uint32_t mvRaw = static_cast<uint32_t>(data & 0xFFFFFFFFULL);
+            move = Move::FromRaw(mvRaw);
+            int16_t s16 = static_cast<int16_t>((data >> 32) & 0xFFFFULL);
+            score = static_cast<int>(s16);
+            depth = static_cast<int>((data >> 48) & 0xFFULL);
+            flag  = static_cast<uint8_t>((data >> 56) & 0xFFULL);
+        }
+
+        // Find the entry whose stored key matches, or nullptr.
+        // Loads both words of the matching entry into kxd/data outputs.
+        Entry* FindEntry(uint64_t key, uint64_t& outData)
+        {
+            Bucket& bucket = m_buckets[key & (m_numBuckets - 1)];
+            for (int i = 0; i < BUCKET_SIZE; ++i)
+            {
+                Entry& e = bucket.entries[i];
+                uint64_t kxd = e.keyXorData.load(std::memory_order_relaxed);
+                uint64_t data = e.data.load(std::memory_order_relaxed);
+                if ((kxd ^ data) == key)
+                {
+                    outData = data;
+                    return &e;
+                }
+            }
+            return nullptr;
         }
     };
 }

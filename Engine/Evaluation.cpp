@@ -1021,13 +1021,20 @@ namespace Chess
         // (material + MG/EG PST for all pieces, white minus black)
         int mgScore = board.GetMGScore();
         int egScore = board.GetEGScore();
-        int whiteBishops = 0;
-        int blackBishops = 0;
 
         // Compute game phase for score interpolation
         int phase = ComputePhase(board);
 
-        // Lean pass: bishop count + queen exposure (not in incremental scores)
+        // Per-side piece counts gathered in the lean pass below.
+        // Indexed [color]: pawns/knights/bishops/rooks/queens.
+        int pawns[2] = {0, 0};
+        int knights[2] = {0, 0};
+        int bishops[2] = {0, 0};
+        int rooks[2] = {0, 0};
+        int queens[2] = {0, 0};
+        int bishopColorMask[2] = {0, 0}; // bit0: dark-square bishop, bit1: light-square bishop
+
+        // Lean pass: material census + queen exposure (not in incremental scores)
         for (int ci = 0; ci < 2; ++ci)
         {
             PlayerColor color = static_cast<PlayerColor>(ci);
@@ -1040,21 +1047,31 @@ namespace Chess
                 if (piece.IsEmpty()) continue;
                 PieceType type = piece.GetType();
 
-                if (type == PieceType::Bishop)
+                switch (type)
                 {
-                    if (color == PlayerColor::White) whiteBishops++;
-                    else blackBishops++;
-                }
-                else if (type == PieceType::Queen)
-                {
+                case PieceType::Pawn:   pawns[ci]++;   break;
+                case PieceType::Knight: knights[ci]++; break;
+                case PieceType::Bishop:
+                    bishops[ci]++;
+                    bishopColorMask[ci] |= 1 << (((sq % 8) + (sq / 8)) & 1);
+                    break;
+                case PieceType::Rook:   rooks[ci]++;   break;
+                case PieceType::Queen:
+                    queens[ci]++;
                     if (IsSquareAttacked(board, sq, enemy))
                     {
                         if (color == PlayerColor::White) mgScore -= 80;
                         else                             mgScore += 80;
                     }
+                    break;
+                default:
+                    break;
                 }
             }
         }
+
+        const int whiteBishops = bishops[0];
+        const int blackBishops = bishops[1];
 
         // Bishop pair bonus
         // Two bishops work well together, controlling both diagonal colors
@@ -1103,6 +1120,69 @@ namespace Chess
         int tempo = (board.GetSideToMove() == PlayerColor::White) ? 8 : -8;  // Tested from 8 to 12
         mgScore += tempo;
         egScore += tempo / 2;  // Tempo less important in endgame
+
+        // ========== ENDGAME KNOWLEDGE ==========
+        const int minors[2] = { knights[0] + bishops[0], knights[1] + bishops[1] };
+        const int majors[2] = { rooks[0] + queens[0],   rooks[1] + queens[1] };
+        const bool noPawns = (pawns[0] == 0 && pawns[1] == 0);
+
+        // Mop-up: one side has mating material, the loser is a bare king with
+        // no pawns. Reward driving the enemy king to the edge and bringing our
+        // own king close - this is what converts KQ/KR/KBB endings instead of
+        // shuffling until the fifty-move rule.
+        for (int winner = 0; winner < 2; ++winner)
+        {
+            int loser = winner ^ 1;
+            bool loserBare = (pawns[loser] == 0 && minors[loser] == 0 && majors[loser] == 0);
+            bool winnerCanMate = (majors[winner] > 0 ||
+                                  minors[winner] >= 3 ||
+                                  (bishops[winner] >= 1 && knights[winner] >= 1) ||
+                                  bishopColorMask[winner] == 3); // both bishop colors
+
+            if (loserBare && winnerCanMate)
+            {
+                int winnerKingSq = board.GetKingSquare(static_cast<PlayerColor>(winner));
+                int loserKingSq  = board.GetKingSquare(static_cast<PlayerColor>(loser));
+
+                // Distance of losing king from board center (0 at center, 6 in corner)
+                int lf = loserKingSq % 8, lr = loserKingSq / 8;
+                int centerDist = std::max(3 - lf, lf - 4) + std::max(3 - lr, lr - 4);
+
+                int mopUp = 10 * centerDist
+                          + 4 * (14 - (std::abs(lf - winnerKingSq % 8) +
+                                       std::abs(lr - winnerKingSq / 8)));
+
+                egScore += (winner == 0) ? mopUp : -mopUp;
+            }
+        }
+
+        // Drawish material scaling applied to the endgame score:
+        //  - scale 0:   dead draws (bare kings, lone minor, KNN vs K)
+        //  - scale 180: opposite-colored bishop endings (~70%). Milder than the
+        //    textbook 1/2 - halving the whole egScore (material included) made
+        //    the engine give away won OCB endings in testing.
+        int egScale = 256;
+        if (noPawns && majors[0] == 0 && majors[1] == 0)
+        {
+            bool whiteWeak = (minors[0] <= 1) || (knights[0] == 2 && bishops[0] == 0);
+            bool blackWeak = (minors[1] <= 1) || (knights[1] == 2 && bishops[1] == 0);
+            if (whiteWeak && blackWeak)
+            {
+                egScale = 0; // Neither side can force mate
+            }
+        }
+        else if (majors[0] == 0 && majors[1] == 0 &&
+                 bishops[0] == 1 && bishops[1] == 1 &&
+                 knights[0] == 0 && knights[1] == 0 &&
+                 bishopColorMask[0] != bishopColorMask[1])
+        {
+            egScale = 180; // Opposite-colored bishops: drawish tendency
+        }
+
+        if (egScale != 256)
+        {
+            egScore = egScore * egScale / 256;
+        }
 
         // Tapered evaluation: interpolate between middlegame and endgame scores
         // Formula: (mgScore * phase + egScore * (256 - phase)) / 256

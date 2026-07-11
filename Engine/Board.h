@@ -296,6 +296,11 @@ namespace Chess
             uint64_t previousZobristKey = 0;
             int previousIncrementalScore = 0;
             int previousEGScore = 0;
+
+            // Occupancy snapshot: UndoMove restores these three words in O(1)
+            // instead of rescanning all 64 squares (RebuildOccupancy)
+            uint64_t previousAllOccupied = 0;
+            uint64_t previousPawnMasks[2] = {0, 0};
         };
 
         // Get last move record for analysis (e.g., move ordering heuristics)

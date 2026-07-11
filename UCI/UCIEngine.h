@@ -34,7 +34,7 @@
 #include "../Engine/Board.h"
 #include "../Engine/Move.h"
 #include "../Engine/Zobrist.h"
-#include "../UI/ChessGame.h"
+#include "../Engine/Search.h"
 
 #include <string>
 #include <sstream>
@@ -56,14 +56,19 @@ namespace Chess
         {
             // Initialize board to standard starting position
             m_board.ResetToStartingPosition();
-            
+
             // Load engine configuration from settings.ini file
             // This allows persistent settings without GUI support
             LoadSettingsFromINI();
-            
+
             // Apply loaded settings to AI engine
             // Configures threads, difficulty, and neural evaluation mode
             InitializeAIFromSettings();
+
+            // Stream live "info" lines from search to stdout (Arena/Cutechess display).
+            m_ai.SetInfoCallback([](const std::string& s) {
+                std::cout << s << "\n" << std::flush;
+            });
         }
 
         ~UCIEngine()
@@ -106,6 +111,7 @@ namespace Chess
         int m_level = 5;           // AI difficulty level (1-10)
         int m_numThreads = 4;      // Number of parallel search threads
         bool m_useNeuralEval = false;  // Enable NNUE evaluation
+        int m_moveOverheadMs = 30; // Safety margin subtracted from per-move budget
 
         // ---------- Command Dispatcher ----------
         // Routes incoming UCI commands to appropriate handlers
@@ -128,13 +134,19 @@ namespace Chess
             {
                 // New game starting - reset everything
                 StopSearchAndJoin();
-                std::lock_guard<std::mutex> lock(m_boardMutex);
-                m_board.ResetToStartingPosition();
-                
+                {
+                    std::lock_guard<std::mutex> lock(m_boardMutex);
+                    m_board.ResetToStartingPosition();
+                }
+
                 // Reload settings for new game
                 // This allows configuration changes between games
                 LoadSettingsFromINI();
                 InitializeAIFromSettings();
+
+                // Clear TT + heuristics. Between moves of same game we keep them
+                // (huge strength win), but a new game means a fresh position.
+                m_ai.NewGameReset();
             }
             else if (cmd == "position")
             {
@@ -238,11 +250,12 @@ namespace Chess
 
             // Supported UCI options
             // These allow GUIs to configure the engine through their interface
-            std::cout << "option name Threads type spin default " << m_numThreads 
+            std::cout << "option name Threads type spin default " << m_numThreads
                       << " min 1 max 64\n";
-            std::cout << "option name Hash type spin default 64 min 1 max 1024\n";
-            std::cout << "option name Level type spin default " << m_level 
+            std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
+            std::cout << "option name Level type spin default " << m_level
                       << " min 1 max 10\n";
+            std::cout << "option name Move Overhead type spin default 30 min 0 max 5000\n";
 
             // Standard options that GUIs expect (even if we don't fully implement them)
             std::cout << "option name Ponder type check default false\n";
@@ -412,13 +425,21 @@ namespace Chess
 
             if (myTime > 0)
             {
-                // Simple time management: time/40 + 75% of increment
-                // This assumes roughly 40 moves remaining in the game
-                int budgetMs = myTime / 40 + (myInc * 3) / 4;
+                // Subtract communication/GUI overhead from usable time.
+                int usableTime = std::max(1, myTime - m_moveOverheadMs);
 
-                // Don't spend more than half our remaining time on one move
-                // and ensure we have at least 50ms to make a move
-                return std::max(50, std::min(budgetMs, myTime / 2));
+                // Adaptive moves-remaining estimate: more moves expected early in game.
+                int movesLeft = 30;
+                if (snapshot.GetFullMoveNumber() < 10) movesLeft = 40;
+                else if (snapshot.GetFullMoveNumber() > 40) movesLeft = 20;
+
+                // Budget = usable/movesLeft + 80% of increment.
+                int budgetMs = usableTime / movesLeft + (myInc * 4) / 5;
+
+                // Hard cap: never spend > 1/4 of remaining time on a single move.
+                int hardCap = usableTime / 4;
+
+                return std::max(10, std::min(budgetMs, hardCap));
             }
 
             // Fallback: 3 seconds (reasonable default for analysis)
@@ -468,9 +489,15 @@ namespace Chess
                 try
                 {
                     int mb = std::stoi(valueStr);
-                    // Hash size change requires AIPlayer::SetHashSize()
-                    // which will be implemented separately
-                    (void)mb;
+                    m_ai.SetHashSize(std::clamp(mb, 1, 4096));
+                }
+                catch (...) { /* Invalid value - ignore */ }
+            }
+            else if (name == "Move Overhead")
+            {
+                try
+                {
+                    m_moveOverheadMs = std::clamp(std::stoi(valueStr), 0, 5000);
                 }
                 catch (...) { /* Invalid value - ignore */ }
             }

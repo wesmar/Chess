@@ -94,6 +94,17 @@ namespace Chess
             return Move();
         }
 
+        // Reconstruct Move from packed 32-bit data only (no captured piece).
+        // Used by transposition table where captured piece is not stored.
+        // Comparison via operator== ignores captured anyway, so this is safe
+        // for move-ordering and PV-move lookups.
+        static constexpr Move FromRaw(uint32_t raw) noexcept
+        {
+            Move m;
+            m.m_data = raw;
+            return m;
+        }
+
         // ========== UTILITY METHODS ==========
         
         // Check if this is a capture move (includes en passant)

@@ -29,7 +29,7 @@ namespace Chess
 {
     // Maximum ply depth for opening book usage
     // After this many half-moves, ProbeBook() returns nullopt
-    // 8 plies = 4 full moves (e.g., 1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Ba4 Nf6)
+    // 12 plies = 6 full moves (matches the deepest stored book lines)
     constexpr int BOOK_MAX_PLIES = 8;
 
     // ========== COMPACT MOVE ENCODING ==========

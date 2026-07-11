@@ -2,7 +2,7 @@
 
 ![Chess Engine Screenshot](Images/chess.gif)
 
-A lightweight, educational chess engine written in modern C++20 with pure WinAPI interface. Perfect for learning how chess engines work without diving through hundreds of thousands of lines of code.
+A competitive chess engine written in modern C++20 with pure WinAPI interface. Built on a deliberately contrarian architecture — a cache-line-aligned mailbox board instead of magic bitboards — and optimized with HFT-style engineering: lock-free data structures, cache-conscious memory layout, and latency hiding via prefetch. Small enough to read, strong enough to compete.
 
 [![Windows](https://img.shields.io/badge/Windows-10%2B-blue.svg)](https://www.microsoft.com/windows)
 [![C++](https://img.shields.io/badge/C%2B%2B-20-orange.svg)](https://isocpp.org/)
@@ -11,9 +11,9 @@ A lightweight, educational chess engine written in modern C++20 with pure WinAPI
 
 ## Why This Project?
 
-Most chess engines are either too simple (lacking modern techniques) or too complex (thousands of files, external dependencies). This project aims to be **educational yet powerful** - implementing professional chess engine techniques in clean, readable code.
+Most chess engines are either too simple (lacking modern techniques) or too complex (thousands of files, external dependencies). This project implements the full modern search arsenal — PVS, singular extensions, ProbCut, aspiration windows, lock-free transposition table — in clean, readable code, while refusing to copy the standard bitboard blueprint.
 
-This is a case study in building a high-performance chess system using **Data-Oriented Design (DOD)** principles, maximizing computational throughput while drastically reducing binary size and eliminating all external library dependencies.
+This is a case study in building a high-performance chess system using **Data-Oriented Design (DOD)** principles, maximizing computational throughput while drastically reducing binary size and eliminating all external library dependencies. Every strength-affecting change is validated the scientific way: engine-vs-engine matches under cutechess-cli with fixed openings and time controls.
 
 ## Key Features
 
@@ -29,19 +29,21 @@ The engine employs a comprehensive suite of search techniques:
 
 #### Core Search Framework
 - **Minimax with Alpha-Beta Pruning** - efficient move tree search
-- **Principal Variation Search (PVS)** - optimizes alpha-beta by assuming first move is best
+- **Principal Variation Search (PVS) at every node** - first move searched with a full window, all others with a null-window scout; re-search only on fail-high. Applied at the root and throughout the interior of the tree
 - **Iterative Deepening** - finds best move within time limit
-- **Aspiration Windows** - narrows search window based on previous iteration score for faster cutoffs
+- **Aspiration Windows with progressive widening** - each iteration starts with a ±30cp window around the previous score; on fail-low/fail-high the window is doubled and the iteration re-searched, converging quickly without wasting a full-window pass
 - **Quiescence Search** - eliminates horizon effect by searching tactical sequences
+- **Lazy Legality Checking** - interior nodes search pseudo-legal moves and verify king safety only when a move is actually made; a beta cutoff after 1-2 moves never pays for validating the other 30+
 
 #### Pruning Techniques
-- **Null Move Pruning (NMP)** - skips branches where opponent can't improve even with two consecutive moves; disabled in endgames to avoid zugzwang errors
+- **Null Move Pruning (NMP)** - skips branches where opponent can't improve even with two consecutive moves; gated on `staticEval >= beta` (no free move can help a losing position) and disabled in endgames to avoid zugzwang errors; runs before move generation so a cutoff skips it entirely
 - **ProbCut** - prunes branches where shallow tactical search at higher beta already exceeds the expected bound; uses captures-only search with SEE filter
 - **Late Move Reduction (LMR)** - reduces depth for quiet moves late in move list using logarithmic formula `log(depth) × log(moveIndex) / 2.25`, with re-search on alpha improvement
 - **Late Move Pruning (LMP)** - completely skips late quiet moves at shallow depths
 - **Futility Pruning** - skips quiet moves at shallow depths when static eval + margin ≤ alpha
 - **Reverse Futility Pruning (RFP)** - returns early when static eval − margin ≥ beta (static null move pruning)
 - **Delta Pruning** - in quiescence search, skips captures that can't possibly raise alpha
+- **SEE Pruning in Main Search** - captures losing more than `120 × depth` centipawns by Static Exchange Evaluation are skipped at shallow depths
 - **Mate Distance Pruning** - stops searching for longer mates when shorter one already found
 
 #### Search Extensions
@@ -50,7 +52,10 @@ The engine employs a comprehensive suite of search techniques:
 
 #### Position Caching
 - **Zobrist Hashing** - lightning-fast incremental position comparison using XOR-sum
-- **Transposition Table** - avoids re-analyzing positions with striped locking for thread safety; separate `ProbeSE()` method for Singular Extension reference scores
+- **Lock-Free Transposition Table (Hyatt XOR-key)** - 16-byte entries with `(keyXorData, data)` atomic pair; readers reconstruct the key by XOR'ing both fields and discard inconsistent reads. Eliminates all mutex contention in the hot path (no striped locking, no `lock` prefixes on probes). Separate `ProbeSE()` method retrieves reference scores for Singular Extensions regardless of depth/bound filtering. Mate-distance scores clamped to a fail-soft-safe envelope so INFINITY-class returns never poison future probes.
+- **Cache-Line TT Buckets (4-way)** - entries grouped into 64-byte `alignas(64)` buckets of four; any probe or store touches exactly one cache line, and 4-way associativity sharply reduces replacement collisions versus a direct-mapped table. Replacement priority: same key → empty slot → shallowest entry
+- **TT Prefetch (HFT-style latency hiding)** - `_mm_prefetch` issued on the child's Zobrist key immediately after making a move, so the DRAM fetch overlaps with repetition checks and mate-distance pruning; by the time the child node probes the table, the line is already in L1
+- **TT Reuse Across Moves** - hash table preserved between consecutive moves in the same game; only `ucinewgame` triggers a full reset. Dramatically reduces re-search of identical positions reached through different move orders.
 - **Internal Iterative Deepening (IID)** - searches shallowly to find a good TT move when none is available, improving move ordering at cost-effective depth
 - **Threefold Repetition Detection** - recognizes draw by repetition during search
 
@@ -60,7 +65,8 @@ The engine employs a comprehensive suite of search techniques:
 - **MVV-LVA (Most Valuable Victim - Least Valuable Attacker)** - breaks ties among captures of equal SEE
 - **Killer Move Heuristic** - remembers quiet moves that caused beta cutoffs at each ply (two slots per ply)
 - **Countermove Heuristic** - remembers the quiet move that refuted the previous move; provides a third ordering hint after killers
-- **History Heuristic** - side-specific scoring for quiet moves that historically caused cutoffs, with **aging** (values halved at each iterative deepening iteration to prioritize recent data)
+- **History Heuristic with Malus** - side-specific scoring for quiet moves that historically caused cutoffs (`+depth²` bonus); quiet moves searched *before* the cutoff move receive a matching `-depth²` penalty, so misordered moves sink fast. Gentle decay (right-shift by 3 = retain ~87%) applied once per search preserves cross-move signal
+- **Stack-Allocated Move Scoring** - `OrderMoves` uses a 256-element stack buffer instead of `std::vector<std::pair<int, Move>>`, removing the last heap allocation from the search hot path
 - **Center Control Bonus** - tactical bonus for moves targeting central squares
 
 #### Parallel Search
@@ -218,10 +224,13 @@ Chess/
 │   ├── ChessConstants.h      # Core constants and enums
 │   ├── Evaluation.cpp/h      # Position evaluation with tapered PST tables
 │   ├── Move.cpp/h            # Move representation (32-bit packed)
-│   ├── MoveGenerator.cpp/h   # Legal move generation
+│   ├── MoveGenerator.cpp/h   # Pseudo-legal move generation
+│   ├── MoveOrdering.cpp      # Move scoring/ordering heuristics + SEE
 │   ├── OpeningBook.cpp/h     # Hardcoded opening book
 │   ├── Piece.h               # Piece representation (8-bit packed)
-│   ├── TranspositionTable.cpp/h # Hash table for position caching
+│   ├── Search.cpp/h          # AIPlayer: root search + main-thread alpha-beta
+│   ├── SearchWorker.cpp      # Worker-thread search (root-parallel scheme)
+│   ├── TranspositionTable.cpp/h # Lock-free hash table (4-way cache-line buckets)
 │   └── Zobrist.cpp/h         # Zobrist hashing for positions
 ├── Engine/Neural/             # NNUE evaluation system
 │   ├── HybridEvaluator.h     # Classical/NNUE mode switching
@@ -235,7 +244,7 @@ Chess/
 │   ├── Dialogs/
 │   │   ├── GameSettingsDialog.cpp/h  # Tabbed settings dialog
 │   │   └── PromotionDialog.cpp/h     # Pawn promotion selector
-│   ├── ChessGame.cpp/h       # Game state management and AI
+│   ├── ChessGame.cpp/h       # Game controller (state, history, PGN)
 │   ├── main.cpp              # Application entry point
 │   ├── VectorRenderer.cpp/h  # Board rendering with Unicode pieces
 │   ├── WinApp.cpp/h          # Main window and event handling
@@ -247,7 +256,11 @@ Chess/
 │   ├── Icons/app.ico
 │   ├── Chess.rc              # Resource definitions
 │   └── Resource.h            # Resource ID constants
+├── testing/                   # Engine-vs-engine test harness
+│   ├── run_match.ps1         # SPRT match driver (cutechess-cli)
+│   └── openings.pgn          # Fixed opening set for fair pairs
 ├── build_all.bat             # Build script for all configurations
+├── build_uci.bat             # Quick build: UCI engine only, x64 Release
 ├── Chess.vcxproj             # Main GUI application project
 ├── ChessEngineUCI.vcxproj    # UCI console engine project
 └── Chess.slnx                # Visual Studio solution
@@ -259,8 +272,9 @@ If you're new to chess programming, here's a suggested reading order:
 
 1. **Start with `Board.cpp`** - This is where all the chess magic happens (piece movement, rule validation)
 2. **Then `Evaluation.cpp`** - Learn how the computer "thinks" about positions
-3. **Move to `MoveGenerator.cpp`** - See how legal moves are generated
-4. **Finally `ChessGame.cpp`** - Understand the AI's decision-making process (alpha-beta search with parallel search)
+3. **Move to `MoveGenerator.cpp`** - See how moves are generated
+4. **Then `Engine/Search.cpp`** - The heart of the engine: iterative deepening, aspiration windows, PVS alpha-beta, quiescence
+5. **Finally `Engine/MoveOrdering.cpp`** - Why move ordering decides everything: SEE, killers, history with malus
 
 ### Key Concepts Explained
 
@@ -278,7 +292,7 @@ If you're new to chess programming, here's a suggested reading order:
 
 **Late Move Reduction**: Moves that appear worse (ordered late) are searched to a shallower depth initially. If they turn out to be good, we re-search them at full depth.
 
-**Transposition Table**: Chess positions can be reached through different move orders. The table remembers positions we've already evaluated, with striped locking for thread-safe parallel access.
+**Transposition Table**: Chess positions can be reached through different move orders. The table remembers positions we've already evaluated. Ours is fully lock-free (Hyatt XOR-key validation) and organized into 4-way buckets that each fit exactly one 64-byte cache line, with an explicit prefetch issued the moment a move is made.
 
 **Root-Parallel Search**: Multiple threads search different root moves simultaneously with dynamic work distribution, avoiding the complexity of shared search trees.
 
@@ -316,6 +330,44 @@ DarkSquare=70,80,100
 - **C** - Toggle coordinates
 - **Esc** - Clear selection
 
+## UCI Engine (Arena / Cutechess / Fritz)
+
+`ChessEngineUCI_x64.exe` is a standard UCI console engine. Drop it into any UCI-compatible GUI (Arena, Cutechess, Fritz, ChessBase) and it auto-detects.
+
+### Supported UCI options
+
+| Option | Type | Range | Description |
+|---|---|---|---|
+| `Threads` | spin | 1..64 | Parallel root-search workers. Set to physical core count for best results. |
+| `Hash` | spin | 1..4096 (MB) | Transposition table size. 128-256 MB recommended; 512+ on memory-rich systems. |
+| `Level` | spin | 1..10 | AI strength. 1-2 randomized, 3-5 casual, 6-7 NMP, 8-10 full pruning + ProbCut + SE + LMR. Use **10** for tournament play. |
+| `Move Overhead` | spin | 0..5000 (ms) | Safety margin subtracted from per-move time budget to absorb GUI/network latency. 30-50 local, 100-200 online. |
+| `Ponder` | check | on/off | Currently accepted but no-op (engine does not yet think on opponent's clock). |
+| `UCI_AnalyseMode` | check | on/off | Accepted, currently no-op. |
+
+The engine emits live `info depth/score/nodes/nps/time/pv` after every completed iterative-deepening iteration, so GUIs display the thinking process in real time.
+
+### Quick smoke test
+
+```
+ChessEngineUCI_x64.exe
+uci
+setoption name Hash value 256
+setoption name Threads value 8
+setoption name Level value 10
+isready
+position startpos
+go movetime 3000
+```
+
+Full Arena setup walkthrough is in [`arena.txt`](arena.txt).
+
+A self-play driver (`selfplay.ps1`) ships with the engine — it spawns the UCI binary, feeds moves via stdin, and prints the resulting game in UCI notation:
+
+```powershell
+.\selfplay.ps1 -MaxMoves 30 -MoveTimeMs 1500
+```
+
 ## Technical Details
 
 ### Why So Small?
@@ -332,6 +384,26 @@ DarkSquare=70,80,100
 - **Memory Usage**: 16-64 MB for transposition table (configurable)
 - **Startup Time**: Near-instant (<100ms)
 - **Binary Size**: 150-500 KB depending on configuration
+
+### Measured Strength Progress
+
+Every batch of search changes is validated with cutechess-cli matches (fixed opening set, tc=8+0.08, 1 thread, level 10, classical eval). The harness ships with the repo:
+
+```powershell
+# SPRT match: stops automatically once +5 Elo is proven (or disproven)
+.\testing\run_match.ps1 -New bin\ChessEngineUCI_x64.exe -Base testing\reference\ChessEngineUCI_x64.exe
+```
+
+| Batch | Changes | Result |
+|---|---|---|
+| 1 | PVS at all nodes, TT-probe-before-pruning, NMP eval gate, aspiration widening, history malus, SEE pruning | **~+200 Elo** (76% score over 194 games) |
+| 2 | Lazy legality, 4-way cache-line TT buckets, TT prefetch, NMP before movegen, AVX2 codegen | **~+120 Elo** vs batch 1; NPS +38%, +1-2 ply at equal time |
+| 3+4 | Staged move picker with lazy SEE (NPS +20%), TT in quiescence, 50-move rule in search, timeout-latch abort, endgame knowledge (mop-up, drawish scaling), O(1) occupancy restore in undo | **+35 Elo** vs batch 2 (LOS 98.7%, 410 games) |
+
+Batch 3 taught the most valuable lesson of the project: three consecutive test matches showed a "regression"
+that turned out to be time forfeits, not chess. A gated clock check let the search overrun its budget by
+hundreds of milliseconds after timeout. Moral: **check the match logs for `loses on time` before touching
+your evaluation.**
 
 ### Architecture Decisions
 
@@ -381,20 +453,48 @@ DarkSquare=70,80,100
 - [x] SEE (Static Exchange Evaluation) — move ordering and QS pruning
 - [x] Killer Move Heuristic (two slots per ply)
 - [x] Countermove Heuristic
-- [x] History Heuristic with aging (halving per iteration)
+- [x] History Heuristic with gentle per-search decay (right-shift by 3)
 - [x] Tapered Evaluation — separate MG/EG PST tables for all piece types
 - [x] Incremental MG + EG scores (zero-cost per evaluation call)
 - [x] Pawn bitboards for O(1) open-file and pawn shield queries
 - [x] Cache-aligned memory structures
 - [x] Stack-allocated MoveList
+- [x] Stack-allocated move scoring buffer in `OrderMoves` (no heap alloc per node)
 - [x] Root-parallel search with dynamic load balancing
+- [x] Lock-free transposition table (Hyatt XOR-key validation, 16-byte entries)
+- [x] TT preservation across moves in the same game (cleared only on `ucinewgame`)
+- [x] Fail-soft returns for futility / reverse futility pruning
+- [x] Live UCI `info depth/score/nodes/nps/time/pv` emitted after every completed iteration
+- [x] Adaptive time management with `Move Overhead` UCI option
 - [x] NNUE infrastructure (HybridEvaluator, NeuralEvaluator, etc.)
+- [x] PVS null-window scout at every interior node
+- [x] Aspiration windows with progressive widening re-search
+- [x] History malus (penalize quiets ordered above the cutoff move)
+- [x] SEE pruning of losing captures in the main search
+- [x] NMP gated on static eval and hoisted before move generation
+- [x] Lazy legality checking (no up-front legal filtering at interior nodes)
+- [x] TT bucketing — 4 entries per 64-byte cache line, `alignas(64)`
+- [x] TT prefetch after make-move (HFT-style latency hiding)
+- [x] AVX2 + intrinsics codegen for x64 release builds
+- [x] Search split by responsibility: `Search.cpp` / `SearchWorker.cpp` / `MoveOrdering.cpp`
+
+- [x] Staged move picker: cheap scoring + lazy SEE at pick time (NPS +20%)
+- [x] TT probing and stores in quiescence search
+- [x] Fifty-move rule detection inside the search tree
+- [x] Timeout latch: gated clock check + per-node abort flag (bounded overshoot)
+- [x] Endgame knowledge: mop-up for bare-king conversion, dead-draw and OCB scaling
+- [x] O(1) occupancy snapshot-restore in UndoMove (no per-undo board rescan)
+- [x] SPRT-driven testing pipeline (`testing/run_match.ps1`)
 
 ### Future 📋
-- [ ] NNUE weight training and integration
+- [ ] Lazy SMP with a persistent thread pool (replace root-parallel `std::async`)
+- [ ] Per-thread history tables (eliminate false sharing on shared atomics)
+- [ ] Continuation history (countermove/follow-up history)
+- [ ] NNUE weight training and integration (small fast net, own trainer)
 - [ ] Syzygy tablebase support
 - [ ] MultiPV analysis mode
 - [ ] Texel Tuning for PST and eval weights
+- [ ] Real pondering (think on opponent's clock)
 
 ## Challenge
 
@@ -403,7 +503,10 @@ DarkSquare=70,80,100
 ## FAQ
 
 **Q: Why WinAPI and not cross-platform?**  
-A: This is an educational project focused on simplicity and extreme optimization. WinAPI provides everything needed without extra abstraction layers. A cross-platform version would require SDL/SFML, adding complexity and size.
+A: This project is focused on simplicity and extreme optimization. WinAPI provides everything needed without extra abstraction layers. A cross-platform version would require SDL/SFML, adding complexity and size.
+
+**Q: Why mailbox instead of bitboards? Isn't that slower?**  
+A: It's a deliberate architectural bet. Raw move generation is somewhat slower than magic bitboards, but the entire board state lives in one L1 cache line, make/unmake is trivially cheap, and the engine wins the time back where it matters more: move ordering, pruning quality, and a cache-conscious transposition table. Strength is validated by measurement, not by copying the standard blueprint.
 
 **Q: Can it beat me?**  
 A: It has 10 difficulty levels ranging from beginner-friendly (random moves) to challenging (10-ply search with full heuristics). Try different levels to find your match!
@@ -415,7 +518,7 @@ A: Absolutely! That's the point. The code is well-commented and structured for l
 A: The code uses Windows 10+ APIs, but could be adapted for older systems with minor changes to the WinAPI calls.
 
 **Q: Why not use a UCI protocol?**  
-A: The project includes both! There's a UCI console engine (`ChessEngineUCI.exe`) that works with Arena and other GUIs, plus the main standalone WinAPI application. The standalone version is the focus since it's more educational and shows the complete implementation, but advanced users can compile the UCI version to use the engine with their favorite chess GUI.
+A: The project includes both. There's a UCI console engine (`ChessEngineUCI.exe`) that works with Arena, Cutechess, Fritz, and any UCI-compatible GUI, plus the main standalone WinAPI application. The UCI version supports `Threads`, `Hash`, `Level`, and `Move Overhead` options, emits live `info` lines, and preserves the transposition table between moves in the same game. See `arena.txt` for a step-by-step Arena setup guide.
 
 **Q: What about NNUE?**  
 A: The complete NNUE infrastructure is implemented and ready. The engine currently runs in Classical evaluation mode. To enable NNUE, place a trained `nn-small.nnue` weight file in the application directory.
@@ -435,7 +538,7 @@ This project is licensed under the MIT License - see the [LICENSE](https://githu
 
 ## Acknowledgments
 
-This project was created during Christmas 2025/2026 as an educational chess engine demonstrating Data-Oriented Design principles in modern C++. Special thanks to the chess programming community for their excellent resources:
+This project was born during Christmas 2025/2026 and has since grown from an educational engine into a measured, match-tested competitor demonstrating Data-Oriented Design principles in modern C++. Special thanks to the chess programming community for their excellent resources:
 - [Chess Programming Wiki](https://www.chessprogramming.org/)
 - [Bruce Moreland's Programming Topics](https://web.archive.org/web/20071026090003/http://www.brucemo.com/compchess/programming/index.htm)
 

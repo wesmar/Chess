@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Release|Win32">
@@ -52,6 +52,9 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <EnableEnhancedInstructionSet Condition="'$(Platform)'=='x64'">AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemDefinitionGroup>
@@ -64,7 +67,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="UCI\UCIMain.cpp" />
-    <ClCompile Include="UI\ChessGame.cpp" />
+    <ClCompile Include="Engine\Search.cpp" />
+    <ClCompile Include="Engine\SearchWorker.cpp" />
+    <ClCompile Include="Engine\MoveOrdering.cpp" />
     <ClCompile Include="Engine\Board.cpp" />
     <ClCompile Include="Engine\MoveGenerator.cpp" />
     <ClCompile Include="Engine\OpeningBook.cpp" />
@@ -75,7 +80,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="UCI\UCIEngine.h" />
-    <ClInclude Include="UI\ChessGame.h" />
+    <ClInclude Include="Engine\Search.h" />
 	<ClInclude Include="UI\LangManager.h" />
     <ClInclude Include="Engine\Board.h" />
     <ClInclude Include="Engine\ChessConstants.h" />
