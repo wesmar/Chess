@@ -1,0 +1,173 @@
+================================================================
+  Modern Chess Engine — Arena GUI Setup Guide (Tournament Ready)
+================================================================
+
+Engine binary:   ChessEngineUCI_x64.exe   (from Chess.7z release archive)
+Arena download:  http://www.playwitharena.de
+Protocol:        UCI (auto-detected by Arena)
+
+----------------------------------------------------------------
+1. INSTALL ENGINE IN ARENA
+----------------------------------------------------------------
+
+  1. Launch Arena.exe.
+  2. Menu: Engines -> Install New Engine...
+  3. Browse to ChessEngineUCI_x64.exe (wherever you extracted Chess.7z).
+  4. When asked engine type: select UCI (Arena auto-detects).
+  5. Engine name will appear as "Modern Chess 1.0".
+  6. Click OK. Engine is now registered.
+
+  (Repeat for ChessEngineUCI_x86.exe if you want a 32-bit slot.)
+
+----------------------------------------------------------------
+2. CONFIGURE ENGINE FOR TOURNAMENT (RECOMMENDED)
+----------------------------------------------------------------
+
+  Menu: Engines -> Manage... -> select "Modern Chess 1.0" -> tab "UCI"
+
+  Set these options (engine reads them via UCI protocol):
+
+    Threads        = (number of physical CPU cores; e.g. 8)
+    Hash           = 256        (MB; 512 if you have 16 GB+ RAM)
+    Level          = 10         (maximum strength)
+    Move Overhead  = 50         (ms; safety margin for GUI lag)
+    Ponder         = off        (only enable if rules allow)
+
+  Click OK / Apply. Arena stores per-engine settings persistently.
+
+----------------------------------------------------------------
+3. RUN A SINGLE GAME vs HUMAN OR vs OTHER ENGINE
+----------------------------------------------------------------
+
+  Menu: Levels -> Time per game...
+    Pick e.g. 5 min + 3 s increment (Blitz) or 25 min + 10 s (Rapid).
+
+  Menu: Engines -> Load (pick "Modern Chess 1.0")
+  Press F2 to start the game.
+
+----------------------------------------------------------------
+4. RUN A TOURNAMENT (multiple engines, round-robin)
+----------------------------------------------------------------
+
+  Menu: Tournament -> New Tournament...
+
+    Engines tab:     Add all engines you want to compete.
+                     For "Modern Chess 1.0", set per-engine options
+                     in the Manage dialog FIRST (see step 2).
+
+    Time tab:        Pick time control. Tournament-typical:
+                       Blitz   5+3
+                       Rapid   15+10
+                       Long    40 moves in 40 min, then 20 min
+
+    Games tab:       Rounds = 2 (one as white, one as black per pair).
+                     Or "round-robin x2" for full schedule.
+
+    Books tab:       Optional — Arena has its own opening books
+                     (Polyglot .bin / Arena .abk).
+                     Engine has a hardcoded book for short lines too.
+
+    Adjudication:    Enable "draw if 50 moves no progress" and
+                     "stop on mate score ±M30" to save time.
+
+  Click Start. Arena drives both engines, logs PGN, scores ELO.
+
+----------------------------------------------------------------
+5. UCI OPTIONS REFERENCE
+----------------------------------------------------------------
+
+  Threads        spin  1..64         Parallel search threads.
+                                     Set to number of physical cores.
+                                     Hyperthreads give diminishing returns.
+
+  Hash           spin  1..4096 (MB)  Transposition table size.
+                                     Bigger = more positions cached.
+                                     Use 25-50% of free RAM.
+                                     128/256/512 typical.
+
+  Level          spin  1..10         AI strength.
+                                     1-2 = random / weak (training mode)
+                                     3-5 = casual
+                                     6-7 = NMP enabled
+                                     8-10= full pruning, ProbCut, SE, LMR
+                                     Always use 10 for tournament.
+
+  Move Overhead  spin  0..5000 (ms)  Subtracted from per-move budget
+                                     to absorb GUI/network latency.
+                                     Local Arena: 30-50.
+                                     Online play / slow PC: 100-200.
+
+  Ponder         check               Currently a no-op (engine accepts
+                                     the option but does not think on
+                                     opponent's time). Leave OFF.
+
+  UCI_AnalyseMode check              Accepted, currently no-op.
+
+----------------------------------------------------------------
+6. ENGINE STRENGTH
+----------------------------------------------------------------
+
+  Level 10, single thread, classical evaluation:
+    ~2160 Elo — measured over 200 games at 8s+0.08s against
+    Stockfish 17 limited to UCI_Elo 2200 (score 44.8%).
+
+  Multiple threads and longer time controls raise practical strength.
+  With an NNUE network file (nn-small.nnue placed next to the exe)
+  strength will increase further — networks ship separately.
+
+----------------------------------------------------------------
+7. TROUBLESHOOTING
+----------------------------------------------------------------
+
+  Engine loses on time:
+    Raise Move Overhead. Arena reports moves slightly after engine sends
+    them; 30 ms is a tight default. Try 100 ms in long tournaments.
+
+  Engine plays weak:
+    1. Check Level = 10.
+    2. Check Hash >= 64. Tiny hash chokes deep search.
+    3. Check Threads matches physical cores.
+    4. Disable "Limit strength" if Arena offers it.
+
+  Engine crashes on weird positions:
+    Save the FEN, reproduce manually via stdin:
+       ChessEngineUCI_x64.exe
+       uci
+       position fen <fenstring>
+       go movetime 5000
+    Send the FEN + crash log to author (marek@wesolowski.eu.org).
+
+  NNUE network not loaded:
+    Engine looks for nn-small.nnue in the EXE directory. Without it,
+    Classical evaluation runs — fine for tournament play, still rated.
+
+----------------------------------------------------------------
+8. SANITY CHECK (run from cmd before tournament)
+----------------------------------------------------------------
+
+  cd <folder with extracted Chess.7z>
+  ChessEngineUCI_x64.exe
+
+  Type these lines (each followed by Enter):
+    uci
+    setoption name Hash value 256
+    setoption name Threads value 8
+    isready
+    position startpos
+    go movetime 3000
+
+  Expect output like:
+    id name Modern Chess 1.0
+    id author Marek Wesolowski
+    option name Threads ...
+    option name Hash ...
+    ...
+    uciok
+    readyok
+    info depth 8 score cp 24 nodes 41000 nps 410000 time 100 pv e2e4
+    ...
+    bestmove <some legal UCI move>
+
+  Then "quit" to exit.
+
+================================================================
