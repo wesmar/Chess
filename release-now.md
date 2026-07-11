@@ -1,5 +1,3 @@
-# Modern Chess — Release ${DATE}
-
 **Download:** `Chess.7z` (${SIZE_7Z}) — password: `github.com`
 
 A competitive chess engine + GUI in modern C++20. Cache-line-aligned mailbox
