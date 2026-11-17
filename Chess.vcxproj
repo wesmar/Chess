@@ -86,7 +86,6 @@
     <ClCompile Include="Engine\Evaluation.cpp" />
     <ClCompile Include="Engine\TranspositionTable.cpp" />
     <ClCompile Include="Engine\Move.cpp" />
-    <ClCompile Include="UCI\UCIMain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="UI\ChessGame.h" />
@@ -122,5 +121,6 @@
   <ItemGroup>
     <ResourceCompile Include="Resources\Chess.rc" />
   </ItemGroup>
+  <Import Project="EngineBuild.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

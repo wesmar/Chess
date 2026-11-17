@@ -1,4 +1,5 @@
 #include "Evaluation.h"
+#include "KPK.h"
 #include "MoveGenerator.h"
 #include <array>
 #include <algorithm>
@@ -966,8 +967,14 @@ namespace Chess
                             int behindRank = (color == PlayerColor::White) ? rank - 1 : rank + 1;
                             if (behindRank >= 0 && behindRank < 8)
                             {
-                                Piece supporter = board.GetPieceAt(file, behindRank);
-                                if (supporter.IsType(PieceType::Pawn) && supporter.IsColor(color))
+                                // Pawns defend diagonally, never straight ahead.
+                                // Count support once even when both pawns defend.
+                                const uint64_t pawns = board.GetPawnMask(color);
+                                const bool left = file > 0 &&
+                                    (pawns & (uint64_t{1} << (behindRank * 8 + file - 1)));
+                                const bool right = file < 7 &&
+                                    (pawns & (uint64_t{1} << (behindRank * 8 + file + 1)));
+                                if (left || right)
                                     bonus += 15;
                             }
                         }
@@ -1011,6 +1018,8 @@ namespace Chess
     // This smoothly transitions between middlegame and endgame evaluation
     int Evaluate(const Board& board)
     {
+        if (board.IsInsufficientMaterial()) return 0;
+        if (auto exact = KPK::Evaluate(board)) return *exact;
         uint64_t key = board.GetZobristKey();
         int cachedScore;
         if (g_evalCache.Probe(key, cachedScore))
@@ -1152,7 +1161,49 @@ namespace Chess
                           + 4 * (14 - (std::abs(lf - winnerKingSq % 8) +
                                        std::abs(lr - winnerKingSq / 8)));
 
+                // Bishop + knight must drive the king to the bishop's color.
+                if (noPawns && majors[winner] == 0 &&
+                    bishops[winner] == 1 && knights[winner] == 1)
+                {
+                    const bool dark = bishopColorMask[winner] == 1;
+                    int cornerDistance = std::min(KPK::Distance(loserKingSq, dark ? 0 : 7),
+                                                  KPK::Distance(loserKingSq, dark ? 63 : 56));
+                    mopUp += 30 * (7 - cornerDistance);
+                }
                 egScore += (winner == 0) ? mopUp : -mopUp;
+            }
+
+            // Wrong bishop + rook pawns: the bare king holds the promotion
+            // corner, and none of the attacker's bishops can control it.
+            //
+            // "Holds" means on the corner OR adjacent to it, not standing on it.
+            // Requiring the exact square made the rule almost useless: the
+            // defender only has to oscillate between the corner and the square
+            // next to it, so half of the drawn positions scored as a full win.
+            // Measured on 7k/8/8/8/8/8/4B2P/6K1, a dead draw: king on h8 gave 0,
+            // on g8 gave 494 and on g7 gave 470, and a depth-14 search of the
+            // drawn position came out at +592 by stepping through the squares
+            // the rule did not cover.
+            //
+            // Distance 1 is still provably drawn: the defender shuffles inside
+            // the corner box, the bishop can never cover the promotion square,
+            // and every attempt to force the king out either blocks the pawn or
+            // stalemates. Wider than that is no longer a proof, so it stops here.
+            if (loserBare && majors[winner] == 0 && knights[winner] == 0 &&
+                bishops[winner] > 0 && pawns[winner] > 0)
+            {
+                const uint64_t pawnMask = board.GetPawnMask(static_cast<PlayerColor>(winner));
+                for (int file : {0, 7})
+                {
+                    const uint64_t fileMask = 0x0101010101010101ULL << file;
+                    int corner = (winner == 0 ? 56 : 0) + file;
+                    int cornerColor = 1 << ((corner % 8 + corner / 8) & 1);
+                    if ((pawnMask & ~fileMask) == 0 &&
+                        (bishopColorMask[winner] & cornerColor) == 0 &&
+                        KPK::Distance(board.GetKingSquare(
+                            static_cast<PlayerColor>(loser)), corner) <= 1)
+                        return 0;
+                }
             }
         }
 
@@ -1168,7 +1219,9 @@ namespace Chess
             bool blackWeak = (minors[1] <= 1) || (knights[1] == 2 && bishops[1] == 0);
             if (whiteWeak && blackWeak)
             {
-                egScale = 0; // Neither side can force mate
+                // Difficulty forcing mate is not a dead position. Search
+                // must still see cooperative mates and trapped material.
+                egScale = 32;
             }
         }
         else if (majors[0] == 0 && majors[1] == 0 &&
@@ -1199,51 +1252,50 @@ namespace Chess
 	
 	// ========== EVALCACHE IMPLEMENTATION ==========
     
+    // Resize/Clear require idle searches. Probe/Store are lock-free and may
+    // run concurrently from all helpers; mixed entry words become cache misses.
     void EvalCache::Resize(size_t sizeMB)
     {
-        if (sizeMB == 0)
-        {
-            m_table.clear();
-            m_table.shrink_to_fit();
-            return;
-        }
-        
-        size_t entries = (sizeMB * 1024 * 1024) / sizeof(EvalCacheEntry);
-        m_table.resize(entries);
-        Clear();
-    }
-    
-    bool EvalCache::Probe(uint64_t key, int& score) const
-    {
-        if (m_table.empty()) return false;
-        
-        size_t index = key % m_table.size();
-        const auto& entry = m_table[index];
-        
-        if (entry.key == key)
-        {
-            score = entry.score;
-            return true;
-        }
-        
-        return false;
-    }
-    
-    void EvalCache::Store(uint64_t key, int score)
-    {
-        if (m_table.empty()) return;
-        
-        size_t index = key % m_table.size();
-        m_table[index] = {key, score, m_generation};
-    }
-    
-    void EvalCache::Clear()
-    {
-        m_generation++;
-        if (m_generation == 0)
-        {
-            std::fill(m_table.begin(), m_table.end(), EvalCacheEntry{0, 0, 0});
-        }
+        m_size = 0;
+        m_table.reset();
+        if (!sizeMB) return;
+        size_t requested = sizeMB * 1024 * 1024 / sizeof(EvalCacheEntry);
+        m_size = 1;
+        while (m_size * 2 <= requested) m_size *= 2;
+        m_table = std::make_unique<EvalCacheEntry[]>(m_size);
+        m_generation = 1;
     }
 
+    bool EvalCache::Probe(uint64_t key, int& score) const
+    {
+        if (!m_size) return false;
+        const auto& entry = m_table[key & (m_size - 1)];
+        uint64_t data = entry.data.load(std::memory_order_relaxed);
+        uint64_t signature = entry.keyXorData.load(std::memory_order_relaxed);
+        if ((signature ^ data) != key || uint32_t(data >> 32) != m_generation) return false;
+        score = static_cast<int32_t>(static_cast<uint32_t>(data));
+        return true;
+    }
+
+    void EvalCache::Store(uint64_t key, int score)
+    {
+        if (!m_size) return;
+        auto& entry = m_table[key & (m_size - 1)];
+        uint64_t data = (uint64_t(m_generation) << 32) | static_cast<uint32_t>(score);
+        entry.data.store(data, std::memory_order_relaxed);
+        entry.keyXorData.store(key ^ data, std::memory_order_relaxed);
+    }
+
+    void EvalCache::Clear()
+    {
+        if (++m_generation == 0)
+        {
+            for (size_t i = 0; i < m_size; ++i)
+            {
+                m_table[i].data.store(0, std::memory_order_relaxed);
+                m_table[i].keyXorData.store(0, std::memory_order_relaxed);
+            }
+            m_generation = 1;
+        }
+    }
 }

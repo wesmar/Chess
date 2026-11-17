@@ -1,10 +1,13 @@
-# Skrypty lokalne
+# Local helper scripts, never published
 git-push.sh
 pack-release.sh
 pack-data.sh
 release-update.sh
+github.sh
+release-now.md
+release/
 
-# Pliki środowiskowe
+# Environment files
 .env
 .env.*
 
@@ -15,7 +18,7 @@ releases/
 *.dat
 *.tar.gz
 
-# Binarki i build
+# Build output
 bin/
 obj/
 build/
@@ -23,5 +26,5 @@ dist/
 *.exe
 *.dll
 
-# Katalogi z danymi
+# Data directories
 data/

@@ -80,12 +80,14 @@ namespace Chess
 
 		// Copy only active history entries (not all 512)
 		m_historyPly = other.m_historyPly;
+		m_moveHistory.resize(m_historyPly + 64);
 		for (int i = 0; i < m_historyPly; ++i)
 		{
 			m_moveHistory[i] = other.m_moveHistory[i];
 		}
 		
 		m_nullMovePly = other.m_nullMovePly;
+		m_nullMoveHistory.resize(m_nullMovePly + 16);
 		for (int i = 0; i < m_nullMovePly; ++i)
 		{
 			m_nullMoveHistory[i] = other.m_nullMoveHistory[i];
@@ -352,7 +354,8 @@ namespace Chess
             Piece capturedPiece = m_board[to];
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(capturedPiece.GetType())][static_cast<int>(capturedPiece.GetColor())][to];
             UpdateIncrementalScore(to, capturedPiece, false);
-            m_pieceLists[static_cast<int>(capturedPiece.GetColor())].Remove(to);
+            record.capturedPieceSlot =
+                m_pieceLists[static_cast<int>(capturedPiece.GetColor())].Remove(to);
         }
 
         // Update Zobrist hash for en passant change
@@ -486,7 +489,8 @@ namespace Chess
             m_pawnMasks[static_cast<int>(capturedColor)] &= ~(1ULL << capturedPawnSquare);
             m_zobristKey ^= Zobrist::pieceKeys[static_cast<int>(capturedPawn.GetType())][static_cast<int>(capturedPawn.GetColor())][capturedPawnSquare];
             UpdateIncrementalScore(capturedPawnSquare, capturedPawn, false);
-            m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Remove(capturedPawnSquare);
+            record.capturedPieceSlot =
+                m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Remove(capturedPawnSquare);
         }
 
         // Set new en passant square if pawn moved two squares
@@ -524,6 +528,8 @@ namespace Chess
             : PlayerColor::White;
 
         // Save move record for undo
+        if (m_historyPly == static_cast<int>(m_moveHistory.size()))
+            m_moveHistory.resize(m_moveHistory.size() + 64);
         m_moveHistory[m_historyPly++] = record;
         return true;
     }
@@ -585,7 +591,8 @@ namespace Chess
         // Restore captured piece to piece list
         if (!record.capturedPiece.IsEmpty())
         {
-            m_pieceLists[static_cast<int>(record.capturedPiece.GetColor())].Add(to);
+            m_pieceLists[static_cast<int>(record.capturedPiece.GetColor())]
+                .RestoreAt(record.capturedPieceSlot, to);
         }
 
         // Restore piece positions
@@ -601,7 +608,8 @@ namespace Chess
             Piece capturedPawn = Piece(PieceType::Pawn,
                 (m_sideToMove == PlayerColor::White) ? PlayerColor::Black : PlayerColor::White);
             m_board[captureSquare] = capturedPawn;
-            m_pieceLists[static_cast<int>(capturedPawn.GetColor())].Add(captureSquare);
+            m_pieceLists[static_cast<int>(capturedPawn.GetColor())]
+                .RestoreAt(record.capturedPieceSlot, captureSquare);
         }
         // Handle castling undo - move rook back
         else if (record.move.IsCastling())
@@ -687,6 +695,8 @@ namespace Chess
             : PlayerColor::White;
 
         // Save null move record for undo
+        if (m_nullMovePly == static_cast<int>(m_nullMoveHistory.size()))
+            m_nullMoveHistory.resize(m_nullMoveHistory.size() + 16);
         m_nullMoveHistory[m_nullMovePly++] = record;
         return true;
     }
@@ -724,6 +734,8 @@ namespace Chess
     // Returns: number of times this position occurred (including current)
     int Board::CountRepetitions() const
     {
+        // A search pass is not part of the legal game history.
+        if (m_nullMovePly > 0) return 1;
         int count = 1; // Current position counts as first occurrence
         const uint64_t targetKey = m_zobristKey;
 
@@ -768,77 +780,51 @@ namespace Chess
     // - K+B vs K+B (bishops on same color)
     //
     // Even with best play, these positions cannot result in checkmate
-    bool Board::IsInsufficientMaterial() const
+    bool Board::HasLegalMove()
     {
-        // Count all pieces
-        int whitePawns = 0, blackPawns = 0;
-        int whiteKnights = 0, blackKnights = 0;
-        int whiteBishops = 0, blackBishops = 0;
-        int whiteRooks = 0, blackRooks = 0;
-        int whiteQueens = 0, blackQueens = 0;
-        int whiteBishopColor = -1, blackBishopColor = -1; // Square color of bishop
-
-        for (int sq = 0; sq < 64; ++sq)
+        const PlayerColor side = m_sideToMove;
+        const auto& pieces = m_pieceLists[static_cast<int>(side)];
+        MoveList moves;
+        for (int i = 0; i < pieces.count; ++i)
         {
-            Piece piece = GetPieceAt(sq);
-            if (piece.IsEmpty()) continue;
-
-            PieceType type = piece.GetType();
-            bool isWhite = piece.IsColor(PlayerColor::White);
-
-            switch (type)
+            moves.clear();
+            MoveGenerator::GeneratePieceMoves(moves, m_board, pieces.squares[i],
+                                              m_enPassantSquare, &m_castlingRights);
+            for (const Move& move : moves)
             {
-            case PieceType::Pawn:
-                if (isWhite) whitePawns++; else blackPawns++;
-                break;
-            case PieceType::Knight:
-                if (isWhite) whiteKnights++; else blackKnights++;
-                break;
-            case PieceType::Bishop:
-                if (isWhite) {
-                    whiteBishops++;
-                    whiteBishopColor = (sq + sq / 8) % 2; // Light or dark square
-                } else {
-                    blackBishops++;
-                    blackBishopColor = (sq + sq / 8) % 2;
-                }
-                break;
-            case PieceType::Rook:
-                if (isWhite) whiteRooks++; else blackRooks++;
-                break;
-            case PieceType::Queen:
-                if (isWhite) whiteQueens++; else blackQueens++;
-                break;
-            default:
-                break;
+                if (!MakeMoveUnchecked(move)) continue;
+                bool legal = !IsInCheck(side);
+                UndoMove();
+                if (legal) return true;
             }
         }
-
-        // Any pawns, rooks, or queens means checkmate is possible
-        if (whitePawns || blackPawns) return false;
-        if (whiteRooks || blackRooks) return false;
-        if (whiteQueens || blackQueens) return false;
-
-        int whitePieces = whiteKnights + whiteBishops;
-        int blackPieces = blackKnights + blackBishops;
-
-        // K vs K
-        if (whitePieces == 0 && blackPieces == 0) return true;
-
-        // K+minor vs K
-        if (whitePieces == 0 && blackPieces == 1) return true;
-        if (whitePieces == 1 && blackPieces == 0) return true;
-
-        // K+B vs K+B (same color bishops)
-        // Bishops on same color cannot force checkmate
-        if (whiteBishops == 1 && blackBishops == 1 &&
-            whiteKnights == 0 && blackKnights == 0 &&
-            whiteBishopColor == blackBishopColor)
-        {
-            return true;
-        }
-
         return false;
+    }
+
+    bool Board::IsInsufficientMaterial() const
+    {
+        if (m_pawnMasks[0] || m_pawnMasks[1]) return false;
+        int knights = 0, bishops = 0, bishopColors = 0;
+        for (int ci = 0; ci < 2; ++ci)
+            for (int i = 0; i < m_pieceLists[ci].count; ++i)
+            {
+                int sq = m_pieceLists[ci].squares[i];
+                switch (m_board[sq].GetType())
+                {
+                case PieceType::Pawn:
+                case PieceType::Rook:
+                case PieceType::Queen: return false;
+                case PieceType::Knight: ++knights; break;
+                case PieceType::Bishop:
+                    ++bishops;
+                    bishopColors |= 1 << ((sq % 8 + sq / 8) & 1);
+                    break;
+                default: break;
+                }
+            }
+        // Dead material, including any number of bishops on one square color.
+        // KNN-K is not dead: a mating position can exist with cooperation.
+        return knights + bishops <= 1 || (knights == 0 && bishopColors != 3);
     }
 
     // Get current game state (playing, check, checkmate, stalemate, draw)
@@ -872,12 +858,6 @@ namespace Chess
             }
         }
 
-        // Legal moves exist - check other conditions
-        if (IsInCheck(m_sideToMove))
-        {
-            return GameState::Check; // In check but has legal moves (game continues)
-        }
-
         // Check draw conditions
         if (CountRepetitions() >= 3)
         {
@@ -894,7 +874,7 @@ namespace Chess
             return GameState::Draw; // Cannot force checkmate
         }
 
-        return GameState::Playing; // Game continues normally
+        return IsInCheck(m_sideToMove) ? GameState::Check : GameState::Playing;
     }
 
     // Check if specified side is in check

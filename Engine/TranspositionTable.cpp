@@ -103,7 +103,7 @@ namespace Chess
         return false;
     }
 
-    bool TranspositionTable::ProbeSE(uint64_t key, int& outScore, Move& outBestMove)
+    bool TranspositionTable::ProbeSnapshot(uint64_t key, int ply, Snapshot& out)
     {
         uint64_t data;
         if (!FindEntry(key, data))
@@ -114,8 +114,20 @@ namespace Chess
         Move move;
         UnpackData(data, storedScore, storedDepth, flag, move);
 
-        outScore = storedScore;
-        outBestMove = move;
+        // Mate-distance correction, identical criterion to Probe: a stored
+        // "mate in N" is only meaningful relative to the ply it is read at.
+        // ProbeSE used to hand the raw value to Singular Extensions.
+        constexpr int MATE = 29000;
+        constexpr int MATE_IN_MAX_PLY = MATE - 250;
+        if (storedScore >= MATE_IN_MAX_PLY && storedScore <= MATE + 250)
+            storedScore -= ply;
+        else if (storedScore <= -MATE_IN_MAX_PLY && storedScore >= -MATE - 250)
+            storedScore += ply;
+
+        out.score = storedScore;
+        out.depth = storedDepth;
+        out.flag = flag;
+        out.move = move;
         return true;
     }
 

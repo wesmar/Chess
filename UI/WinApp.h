@@ -93,6 +93,9 @@ namespace Chess
         GameMode m_currentGameMode = GameMode::HumanVsComputer;
         DifficultyLevel m_currentDifficulty = 3;
         bool m_useNeuralEval = false;
+        int m_numThreads = 4;
+        void StopAIAndWait();
+        std::atomic<bool> m_stopAI{false};
         
         // ========== SELECTION & ANIMATION ==========
         int m_selectedSquare = -1;                      // Currently selected square (-1 = none)

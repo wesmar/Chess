@@ -61,12 +61,6 @@ namespace Chess
             m_players[0].isAI = !humanPlaysWhite;  // White (Player 0)
             m_players[1].isAI = humanPlaysWhite;   // Black (Player 1)
             
-            // Set default difficulty for AI player (whichever one is AI)
-            int aiIndex = m_players[0].isAI ? 0 : 1;
-            if (m_players[aiIndex].aiDifficulty == 5)
-            {
-                m_players[aiIndex].aiDifficulty = 3;
-            }
         }
         else if (mode == GameMode::ComputerVsComputer)
         {
@@ -99,9 +93,33 @@ namespace Chess
             }
         }
         
+        if (m_aiWhite) m_aiWhite->NewGameReset();
+        if (m_aiBlack) m_aiBlack->NewGameReset();
         UpdateLegalMoves();
         UpdateHighlightedSquares();
         UpdateGameRecord();
+    }
+
+    void ChessGame::ConfigureAI(int threads, bool neural)
+    {
+        for (AIPlayer* ai : {m_aiWhite.get(), m_aiBlack.get()})
+        {
+            if (!ai) continue;
+            ai->SetThreads(threads);
+            ai->SetHashSize(64);
+            auto mode = neural ? Neural::EvalMode::Auto : Neural::EvalMode::Classical;
+            if (ai->GetEvaluator().GetMode() != mode)
+            {
+                ai->GetEvaluator().SetMode(mode);
+                ai->NewGameReset();
+            }
+        }
+    }
+
+    void ChessGame::AbortAI()
+    {
+        if (m_aiWhite) m_aiWhite->AbortSearch();
+        if (m_aiBlack) m_aiBlack->AbortSearch();
     }
 
     // Load game from FEN string

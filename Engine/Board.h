@@ -28,6 +28,7 @@
 #include <string>
 #include <optional>
 #include <stack>
+#include <vector>
 
 namespace Chess
 {
@@ -46,18 +47,34 @@ namespace Chess
             if (count < 16) squares[count++] = square;
         }
 
-        // Remove piece at square from list
-        // Uses swap-with-last for O(1) removal
-        constexpr void Remove(int square) noexcept
+        // Remove piece at square from list.
+        // Uses swap-with-last for O(1) removal and returns the slot it freed,
+        // which UndoMove needs to put the list back exactly as it was. Order is
+        // not cosmetic here: move generation walks this list, so a permuted list
+        // yields the same moves in a different order and quietly changes the
+        // shape of the whole search tree below that node.
+        constexpr int Remove(int square) noexcept
         {
             for (int i = 0; i < count; ++i)
             {
                 if (squares[i] == square)
                 {
                     squares[i] = squares[--count];  // Swap with last element
-                    return;
+                    return i;
                 }
             }
+            return -1;
+        }
+
+        // Exact inverse of a Remove(square) that returned `slot`: send the
+        // element that was swapped down back to the tail, then put `square`
+        // back in its own slot. Add() would instead append to the tail, which
+        // is why undoing a capture used to permute the list permanently.
+        constexpr void RestoreAt(int slot, int square) noexcept
+        {
+            if (slot < 0 || slot > count || count >= 16) { Add(square); return; }
+            squares[count++] = squares[slot];
+            squares[slot] = square;
         }
 
         // Update piece position (for moves)
@@ -216,6 +233,7 @@ namespace Chess
 
         // Generate all legal moves in current position
         [[nodiscard]] MoveList GenerateLegalMoves() const;
+        [[nodiscard]] bool HasLegalMove();
         
         // Check if specific move is legal
         [[nodiscard]] bool IsMoveLegal(const Move& move) const;
@@ -248,6 +266,7 @@ namespace Chess
         
         // Count position repetitions (for threefold repetition)
         [[nodiscard]] int CountRepetitions() const;
+        [[nodiscard]] bool IsNullSearch() const noexcept { return m_nullMovePly > 0; }
         
         // Check if material is insufficient for checkmate
         [[nodiscard]] bool IsInsufficientMaterial() const;
@@ -296,6 +315,9 @@ namespace Chess
             uint64_t previousZobristKey = 0;
             int previousIncrementalScore = 0;
             int previousEGScore = 0;
+            // Slot the captured piece occupied in its owner's piece list, so
+            // undo restores the exact ordering rather than appending.
+            int capturedPieceSlot = -1;
 
             // Occupancy snapshot: UndoMove restores these three words in O(1)
             // instead of rescanning all 64 squares (RebuildOccupancy)
@@ -390,7 +412,7 @@ namespace Chess
         uint64_t m_pawnMasks[2] = {0ULL, 0ULL}; // [0]=White, [1]=Black
 
         // Move history for undo functionality
-        std::array<MoveRecord, 512> m_moveHistory;
+        std::vector<MoveRecord> m_moveHistory;
         int m_historyPly = 0;
 
         // Null move history for null move pruning
@@ -400,7 +422,7 @@ namespace Chess
             uint64_t previousZobristKey = 0;
         };
 
-        std::array<NullMoveRecord, 512> m_nullMoveHistory;
+        std::vector<NullMoveRecord> m_nullMoveHistory;
         int m_nullMovePly = 0;
     };
 

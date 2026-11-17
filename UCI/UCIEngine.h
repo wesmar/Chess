@@ -64,6 +64,8 @@ namespace Chess
             // Apply loaded settings to AI engine
             // Configures threads, difficulty, and neural evaluation mode
             InitializeAIFromSettings();
+            m_ai.SetHashSize(64);
+            m_ai.SetStopSignal(&m_stopRequested);
 
             // Stream live "info" lines from search to stdout (Arena/Cutechess display).
             m_ai.SetInfoCallback([](const std::string& s) {
@@ -139,10 +141,7 @@ namespace Chess
                     m_board.ResetToStartingPosition();
                 }
 
-                // Reload settings for new game
-                // This allows configuration changes between games
-                LoadSettingsFromINI();
-                InitializeAIFromSettings();
+                // UCI options remain in force across games.
 
                 // Clear TT + heuristics. Between moves of same game we keep them
                 // (huge strength win), but a new game means a fresh position.
@@ -165,6 +164,7 @@ namespace Chess
             }
             else if (cmd == "setoption")
             {
+                StopSearchAndJoin();
                 HandleSetOption(iss);
             }
             else if (cmd == "quit")
@@ -256,6 +256,10 @@ namespace Chess
             std::cout << "option name Level type spin default " << m_level
                       << " min 1 max 10\n";
             std::cout << "option name Move Overhead type spin default 30 min 0 max 5000\n";
+            std::cout << "option name OwnBook type check default true\n";
+            // Path to a network file. Empty means classical evaluation, which
+            // is also what a failed load falls back to.
+            std::cout << "option name EvalFile type string default <empty>\n";
 
             // Standard options that GUIs expect (even if we don't fully implement them)
             std::cout << "option name Ponder type check default false\n";
@@ -364,6 +368,8 @@ namespace Chess
             // Calculate time budget for this move
             int timeMs = CalculateSearchTime(movetime, infinite,
                                               wtime, btime, winc, binc);
+            if (depth > 0 && movetime <= 0 && wtime <= 0 && btime <= 0)
+                timeMs = 60 * 60 * 1000;
 
             // Take a snapshot of current position for the search thread
             Board boardCopy;
@@ -402,6 +408,16 @@ namespace Chess
         }
 
         // Calculate how much time to spend on this move
+        // How many more moves the clock is assumed to have to cover.
+        //
+        // Tried 32/24/16, i.e. a fifth more time on every move: 0.490 over 200
+        // paired games, with zero losses on time. So the engine was not being
+        // starved by the old estimate - it simply does not convert extra
+        // thinking time here into results. Reverted.
+        static constexpr int MOVES_LEFT_OPENING = 40;
+        static constexpr int MOVES_LEFT_MIDDLE  = 30;
+        static constexpr int MOVES_LEFT_LATE    = 20;
+
         int CalculateSearchTime(int movetime, bool infinite,
                                 int wtime, int btime, int winc, int binc)
         {
@@ -429,9 +445,12 @@ namespace Chess
                 int usableTime = std::max(1, myTime - m_moveOverheadMs);
 
                 // Adaptive moves-remaining estimate: more moves expected early in game.
-                int movesLeft = 30;
-                if (snapshot.GetFullMoveNumber() < 10) movesLeft = 40;
-                else if (snapshot.GetFullMoveNumber() > 40) movesLeft = 20;
+                // Smaller divisor means more time on the move at hand. The hard
+                // cap below still forbids spending more than a quarter of what is
+                // left, so a lower estimate cannot run the clock down on its own.
+                int movesLeft = MOVES_LEFT_MIDDLE;
+                if (snapshot.GetFullMoveNumber() < 10) movesLeft = MOVES_LEFT_OPENING;
+                else if (snapshot.GetFullMoveNumber() > 40) movesLeft = MOVES_LEFT_LATE;
 
                 // Budget = usable/movesLeft + 80% of increment.
                 int budgetMs = usableTime / movesLeft + (myInc * 4) / 5;
@@ -439,7 +458,7 @@ namespace Chess
                 // Hard cap: never spend > 1/4 of remaining time on a single move.
                 int hardCap = usableTime / 4;
 
-                return std::max(10, std::min(budgetMs, hardCap));
+                return std::max(1, std::min(budgetMs, hardCap));
             }
 
             // Fallback: 3 seconds (reasonable default for analysis)
@@ -484,6 +503,10 @@ namespace Chess
                 }
                 catch (...) { /* Invalid value - ignore */ }
             }
+            else if (name == "OwnBook")
+            {
+                m_ai.SetOwnBook(valueStr == "true" || valueStr == "1");
+            }
             else if (name == "Hash")
             {
                 try
@@ -492,6 +515,24 @@ namespace Chess
                     m_ai.SetHashSize(std::clamp(mb, 1, 4096));
                 }
                 catch (...) { /* Invalid value - ignore */ }
+            }
+            else if (name == "EvalFile")
+            {
+                if (valueStr.empty() || valueStr == "<empty>")
+                {
+                    m_ai.LoadNetwork("");
+                }
+                else if (!m_ai.LoadNetwork(valueStr))
+                {
+                    // Say so rather than quietly playing on with the classical
+                    // evaluation: a silently ignored network looks like a weak one.
+                    std::cout << "info string EvalFile not loaded: "
+                              << m_ai.GetNetworkError() << "\n" << std::flush;
+                }
+                else
+                {
+                    std::cout << "info string EvalFile loaded: " << valueStr << "\n" << std::flush;
+                }
             }
             else if (name == "Move Overhead")
             {

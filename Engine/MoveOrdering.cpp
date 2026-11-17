@@ -70,7 +70,7 @@ namespace Chess
             if (prevFrom >= 0 && prevTo >= 0)
             {
                 int oppSide = 1 - sideIndex;
-                Move counterMove = m_counterMoves[oppSide][prevFrom][prevTo];
+                Move counterMove = Move::FromRaw(m_counterMoves[oppSide][prevFrom][prevTo].load(std::memory_order_relaxed));
                 if (move == counterMove)
                     return 600000;
             }
@@ -183,7 +183,7 @@ namespace Chess
             int prevFrom = lastRecord.move.GetFrom();
             int prevTo = lastRecord.move.GetTo();
             int oppSide = 1 - sideIndex;
-            Move counterMove = m_counterMoves[oppSide][prevFrom][prevTo];
+            Move counterMove = Move::FromRaw(m_counterMoves[oppSide][prevFrom][prevTo].load(std::memory_order_relaxed));
             if (move == counterMove)
                 return 600000;
         }
@@ -320,11 +320,10 @@ namespace Chess
             depth++;
 
             // Find smallest attacker for current side
-            auto attackers = GetSmallestAttacker(workingBoard, targetSquare, sideToMove);
-            if (attackers.empty())
+            int attackerSquare = GetSmallestAttacker(workingBoard, targetSquare, sideToMove);
+            if (attackerSquare < 0)
                 break;
 
-            int attackerSquare = attackers[0];
             Piece attackingPiece = workingBoard[attackerSquare];
 
             gain[depth] = lastCapturedValue - gain[depth - 1];
@@ -354,10 +353,9 @@ namespace Chess
     }
 
     // Find smallest attacker of given square by specified color
-    std::vector<int> AIPlayer::GetSmallestAttacker(const std::array<Piece, SQUARE_COUNT>& pieces,
+    int AIPlayer::GetSmallestAttacker(const std::array<Piece, SQUARE_COUNT>& pieces,
                                                     int square, PlayerColor attackerColor) const
     {
-        std::vector<int> attackers;
 
         int file = square % 8;
         int rank = square / 8;
@@ -373,8 +371,7 @@ namespace Chess
                     Piece p = pieces[sq];
                     if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::White)
                     {
-                        attackers.push_back(sq);
-                        return attackers;
+                        return sq;
                     }
                 }
                 if (file < 7)
@@ -383,8 +380,7 @@ namespace Chess
                     Piece p = pieces[sq];
                     if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::White)
                     {
-                        attackers.push_back(sq);
-                        return attackers;
+                        return sq;
                     }
                 }
             }
@@ -399,8 +395,7 @@ namespace Chess
                     Piece p = pieces[sq];
                     if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::Black)
                     {
-                        attackers.push_back(sq);
-                        return attackers;
+                        return sq;
                     }
                 }
                 if (file < 7)
@@ -409,8 +404,7 @@ namespace Chess
                     Piece p = pieces[sq];
                     if (p.IsType(PieceType::Pawn) && p.GetColor() == PlayerColor::Black)
                     {
-                        attackers.push_back(sq);
-                        return attackers;
+                        return sq;
                     }
                 }
             }
@@ -432,11 +426,17 @@ namespace Chess
                 Piece p = pieces[sq];
                 if (p.IsType(PieceType::Knight) && p.GetColor() == attackerColor)
                 {
-                    attackers.push_back(sq);
-                    return attackers;
+                    return sq;
                 }
             }
         }
+
+        // Sliders. PIECE_VALUES orders them bishop(330) < rook(500) < queen(900),
+        // so a queen standing on one diagonal must not pre-empt a bishop on
+        // another diagonal or a rook on a file. Remember the queen, keep
+        // scanning, and fall back to it only when both cheaper slider classes
+        // came up empty. Same number of ray scans as before.
+        int queenSquare = -1;
 
         // Check for bishop/queen on diagonals
         static constexpr std::array<std::pair<int, int>, 4> DIAGONALS = {{
@@ -453,11 +453,10 @@ namespace Chess
                 Piece p = pieces[sq];
                 if (p)
                 {
-                    if (p.GetColor() == attackerColor &&
-                        (p.IsType(PieceType::Bishop) || p.IsType(PieceType::Queen)))
+                    if (p.GetColor() == attackerColor)
                     {
-                        attackers.push_back(sq);
-                        return attackers;
+                        if (p.IsType(PieceType::Bishop)) return sq;
+                        if (p.IsType(PieceType::Queen) && queenSquare < 0) queenSquare = sq;
                     }
                     break;
                 }
@@ -481,11 +480,10 @@ namespace Chess
                 Piece p = pieces[sq];
                 if (p)
                 {
-                    if (p.GetColor() == attackerColor &&
-                        (p.IsType(PieceType::Rook) || p.IsType(PieceType::Queen)))
+                    if (p.GetColor() == attackerColor)
                     {
-                        attackers.push_back(sq);
-                        return attackers;
+                        if (p.IsType(PieceType::Rook)) return sq;
+                        if (p.IsType(PieceType::Queen) && queenSquare < 0) queenSquare = sq;
                     }
                     break;
                 }
@@ -493,6 +491,9 @@ namespace Chess
                 r += dr;
             }
         }
+
+        // Queen is cheaper than the king, so it is resolved before the king scan
+        if (queenSquare >= 0) return queenSquare;
 
         // Check for king
         static constexpr std::array<std::pair<int, int>, 8> KING_OFFSETS = {{
@@ -510,13 +511,12 @@ namespace Chess
                 Piece p = pieces[sq];
                 if (p.IsType(PieceType::King) && p.GetColor() == attackerColor)
                 {
-                    attackers.push_back(sq);
-                    return attackers;
+                    return sq;
                 }
             }
         }
 
-        return attackers;
+        return -1;
     }
 
     // ========== STAGED MOVE PICKING ==========
@@ -577,7 +577,7 @@ namespace Chess
             if (prevFrom >= 0)
             {
                 int oppSide = 1 - sideIndex;
-                if (move == m_counterMoves[oppSide][prevFrom][prevTo])
+                if (move.GetRawData() == m_counterMoves[oppSide][prevFrom][prevTo].load(std::memory_order_relaxed))
                 {
                     scores[i] = 600000;
                     continue;
@@ -594,6 +594,12 @@ namespace Chess
                     .load(std::memory_order_relaxed);
             }
 
+            // Prior for quiet moves the history table knows nothing about.
+            // Tried replacing this with the engine's own piece-square-table delta,
+            // which is piece-aware where these four squares are not: measured
+            // 0.520 over 200 paired games on its own and 0.485 bundled with the
+            // endgame fix, i.e. neutral twice. Kept as it was rather than adopting
+            // an unproven change; the variant is in testing/candidates/r13.
             int toSquare = move.GetTo();
             int centerBonus = 0;
             if (toSquare == 27 || toSquare == 28 || toSquare == 35 || toSquare == 36)

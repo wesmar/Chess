@@ -17,6 +17,12 @@ namespace Chess
     class MoveGenerator
     {
     public:
+        // Append moves for one piece. Allows existence checks to stop early
+        // while using exactly the same piece rules as full move generation.
+        static void GeneratePieceMoves(MoveList& moves,
+            const std::array<Piece, SQUARE_COUNT>& board, int square,
+            int enPassantSquare, const std::array<bool, 4>* castlingRights);
+
         // Generate all pseudo-legal moves for given position
         // Returns moves that follow piece movement rules but may leave king in check
         // Legal move validation requires checking if king is attacked after move

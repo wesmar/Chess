@@ -125,6 +125,8 @@ namespace Chess
         void SetGameMode(GameMode mode) { m_gameMode = mode; }
         void SetTimeControl(int minutes, int incrementSeconds = 0);
         void SetMaxUndoDepth(int depth);
+        void ConfigureAI(int threads, bool neural);
+        void AbortAI();
         
         // ========== HELPER METHODS ==========
         

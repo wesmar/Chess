@@ -22,111 +22,41 @@ namespace Chess
     //
     // Uses piece list optimization when available for faster iteration
     // Falls back to full board scan if piece list is not provided
+    void MoveGenerator::GeneratePieceMoves(MoveList& moves,
+        const std::array<Piece, SQUARE_COUNT>& board, int square,
+        int enPassantSquare, const std::array<bool, 4>* castlingRights)
+    {
+        const Piece piece = board[square];
+        const PlayerColor color = piece.GetColor();
+        switch (piece.GetType())
+        {
+        case PieceType::Pawn: GeneratePawnMoves(moves, board, square, color, enPassantSquare); break;
+        case PieceType::Knight: GenerateKnightMoves(moves, board, square, color); break;
+        case PieceType::Bishop: GenerateBishopMoves(moves, board, square, color); break;
+        case PieceType::Rook: GenerateRookMoves(moves, board, square, color); break;
+        case PieceType::Queen: GenerateQueenMoves(moves, board, square, color); break;
+        case PieceType::King: GenerateKingMoves(moves, board, square, color, castlingRights); break;
+        default: break;
+        }
+    }
+
     MoveList MoveGenerator::GeneratePseudoLegalMoves(
         const std::array<Piece, SQUARE_COUNT>& board,
-        PlayerColor sideToMove,
-        int enPassantSquare,
-        const std::array<bool, 4>* castlingRights,
-        const PieceList* pieceList)
+        PlayerColor sideToMove, int enPassantSquare,
+        const std::array<bool, 4>* castlingRights, const PieceList* pieceList)
     {
         MoveList moves;
-
-        // Fast path: iterate only over pieces of current side using piece list
-        // This is much faster than scanning all 64 squares
         if (pieceList)
         {
-            for (int idx = 0; idx < pieceList->count; ++idx)
-            {
-                int i = pieceList->squares[idx];
-                Piece piece = board[i];
-
-                // Generate moves specific to each piece type
-                // Each piece has different movement patterns and rules
-                switch (piece.GetType())
-                {
-                case PieceType::Pawn:
-                {
-                    GeneratePawnMoves(moves, board, i, sideToMove, enPassantSquare);
-                    break;
-                }
-                case PieceType::Knight:
-                {
-                    GenerateKnightMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::Bishop:
-                {
-                    GenerateBishopMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::Rook:
-                {
-                    GenerateRookMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::Queen:
-                {
-                    GenerateQueenMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::King:
-                {
-                    GenerateKingMoves(moves, board, i, sideToMove, castlingRights);
-                    break;
-                }
-                default:
-                    break;
-                }
-            }
+            for (int i = 0; i < pieceList->count; ++i)
+                GeneratePieceMoves(moves, board, pieceList->squares[i], enPassantSquare, castlingRights);
         }
         else
         {
-            // Slow path: scan entire board when piece list not available
-            // Required during initialization or when piece list is not maintained
-            for (int i = 0; i < SQUARE_COUNT; ++i)
-            {
-                Piece piece = board[i];
-                if (piece.IsEmpty() || !piece.IsColor(sideToMove))
-                    continue;
-
-                switch (piece.GetType())
-                {
-                case PieceType::Pawn:
-                {
-                    GeneratePawnMoves(moves, board, i, sideToMove, enPassantSquare);
-                    break;
-                }
-                case PieceType::Knight:
-                {
-                    GenerateKnightMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::Bishop:
-                {
-                    GenerateBishopMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::Rook:
-                {
-                    GenerateRookMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::Queen:
-                {
-                    GenerateQueenMoves(moves, board, i, sideToMove);
-                    break;
-                }
-                case PieceType::King:
-                {
-                    GenerateKingMoves(moves, board, i, sideToMove, castlingRights);
-                    break;
-                }
-                default:
-                    break;
-                }
-            }
+            for (int sq = 0; sq < SQUARE_COUNT; ++sq)
+                if (!board[sq].IsEmpty() && board[sq].IsColor(sideToMove))
+                    GeneratePieceMoves(moves, board, sq, enPassantSquare, castlingRights);
         }
-
         return moves;
     }
 

@@ -53,6 +53,7 @@ namespace Chess
 		m_currentGameMode = settings.gameMode;
 		m_currentDifficulty = settings.aiDifficulty;
 		m_useNeuralEval = settings.useNeuralEval;
+		m_numThreads = settings.numThreads;
 		
 		// Configure renderer with loaded visual settings
 		auto config = m_renderer.GetConfig();
@@ -66,6 +67,7 @@ namespace Chess
 
     MainWindow::~MainWindow()
     {
+        StopAIAndWait();
         // Clean up timer if active
         if (m_timerId != 0)
         {
@@ -105,7 +107,7 @@ namespace Chess
 		// Configure AI thread count from settings
 		GameSettingsDialog::Settings settings;
 		GameSettingsDialog::LoadFromINI(settings);
-		m_game.GetCurrentAIPlayer()->SetThreads(settings.numThreads);
+		m_numThreads = settings.numThreads;
 		m_game.SetMaxUndoDepth(settings.maxUndoDepth);
 
 		// Initialize game with correct mode after window is ready
@@ -113,12 +115,8 @@ namespace Chess
 		m_game.NewGame(m_currentGameMode);
 
 		// Apply neural evaluation mode to AI players if they exist
-		if (m_game.GetCurrentAIPlayer())
-		{
-			m_game.GetCurrentAIPlayer()->GetEvaluator().SetMode(
-				m_useNeuralEval ? Chess::Neural::EvalMode::Auto
-								: Chess::Neural::EvalMode::Classical);
-		}
+		SetAIDifficulty(m_currentDifficulty);
+		m_game.ConfigureAI(m_numThreads, m_useNeuralEval);
 
 		return true;
 	}
@@ -616,12 +614,8 @@ namespace Chess
 				CheckMenuItem(m_hMenu, IDM_GAME_USE_NEURAL,
 							  m_useNeuralEval ? MF_CHECKED : MF_UNCHECKED);
 
-				if (m_game.GetCurrentAIPlayer())
-				{
-					m_game.GetCurrentAIPlayer()->GetEvaluator().SetMode(
-						m_useNeuralEval ? Chess::Neural::EvalMode::Auto
-										: Chess::Neural::EvalMode::Classical);
-				}
+				StopAIAndWait();
+				m_game.ConfigureAI(m_numThreads, m_useNeuralEval);
 
 				GameSettingsDialog::Settings settings;
 				GameSettingsDialog::LoadFromINI(settings);
@@ -658,6 +652,12 @@ namespace Chess
 						Lang::LoadFromName(settings.language);
 						LocalizeMenu();
 					}
+
+					StopAIAndWait();
+					m_numThreads = settings.numThreads;
+					m_useNeuralEval = settings.useNeuralEval;
+					m_game.ConfigureAI(m_numThreads, m_useNeuralEval);
+					CheckMenuItem(m_hMenu, IDM_GAME_USE_NEURAL, m_useNeuralEval ? MF_CHECKED : MF_UNCHECKED);
 
 					// Apply UI settings
 					m_uiSettings.flipBoard = settings.flipBoard;
@@ -977,9 +977,12 @@ namespace Chess
 			m_aiThinking = true;
 			
 			// Calculate AI move asynchronously to avoid blocking UI
-			m_aiFuture = std::async(std::launch::async, [this]() {
-				Board boardCopy = m_game.GetBoard();
-				return m_game.GetCurrentAIPlayer()->CalculateBestMove(boardCopy, 5000);
+			Board boardCopy = m_game.GetBoard();
+			AIPlayer* ai = m_game.GetCurrentAIPlayer().get();
+			m_stopAI.store(false, std::memory_order_release);
+			ai->SetStopSignal(&m_stopAI);
+			m_aiFuture = std::async(std::launch::async, [ai, boardCopy]() {
+				return ai->CalculateBestMove(boardCopy, 5000);
 			});
 		}
 		
@@ -1483,14 +1486,7 @@ namespace Chess
     void MainWindow::LoadGameFromFile(const std::wstring& filename)
     {
         // CRITICAL: Abort AI search before loading new game state
-        if (m_aiThinking)
-        {
-            if (auto& ai = m_game.GetCurrentAIPlayer())
-            {
-                ai->AbortSearch();
-            }
-            m_aiThinking = false;
-        }
+        StopAIAndWait();
         // Convert wide string and load PGN game
         std::string narrowFilename = WStringToString(filename);
         m_game.LoadPGN(narrowFilename);
@@ -1578,16 +1574,18 @@ namespace Chess
         m_renderer.RenderPiece(hdc, pieceRect, m_currentAnimation.piece);
     }
 
+    void MainWindow::StopAIAndWait()
+    {
+        m_stopAI.store(true, std::memory_order_release);
+        m_game.AbortAI();
+        if (m_aiFuture.valid()) m_aiFuture.get();
+        m_aiThinking = false;
+    }
+
 	void MainWindow::NewGame()
 	{
 		// CRITICAL: Abort any ongoing AI search before resetting game state
-		if (m_aiThinking)
-		{
-			if (auto& ai = m_game.GetCurrentAIPlayer())
-			{
-				ai->AbortSearch();
-			}
-		}
+		StopAIAndWait();
 		// Determine who plays white based on board flip setting
 		// When board is flipped (black on bottom), human plays black
 		// When board is normal (white on bottom), human plays white
@@ -1607,14 +1605,7 @@ namespace Chess
     {
         // CRITICAL: Stop AI search immediately to prevent applying moves to changed board state
         // Race condition protection: AI thread must be aborted before board state changes
-        if (m_aiThinking)
-        {
-            if (auto& ai = m_game.GetCurrentAIPlayer())
-            {
-                ai->AbortSearch();
-            }
-            m_aiThinking = false;
-        }
+        StopAIAndWait();
         // Undo last move and update display
         if (m_game.UndoMove())
         {
@@ -1627,14 +1618,7 @@ namespace Chess
     void MainWindow::RedoMove()
     {
         // CRITICAL: Stop AI search immediately (same protection as UndoMove)
-        if (m_aiThinking)
-        {
-            if (auto& ai = m_game.GetCurrentAIPlayer())
-            {
-                ai->AbortSearch();
-            }
-            m_aiThinking = false;
-        }
+        StopAIAndWait();
         // Redo previously undone move
         if (m_game.RedoMove())
         {
@@ -1646,6 +1630,7 @@ namespace Chess
 
 	void MainWindow::SetGameMode(GameMode mode)
 	{
+		StopAIAndWait();
 		// Update game mode in both window and game logic
 		m_currentGameMode = mode;
 		m_game.SetGameMode(mode);
@@ -1653,6 +1638,7 @@ namespace Chess
 
 	void MainWindow::SetAIDifficulty(DifficultyLevel difficulty)
 	{
+		StopAIAndWait();
 		// Update AI difficulty for both players
 		m_currentDifficulty = difficulty;
 		m_game.SetAIDifficulty(PlayerColor::White, difficulty);
@@ -1661,7 +1647,7 @@ namespace Chess
 		// Reload thread count from settings to respect user configuration
 		GameSettingsDialog::Settings settings;
 		GameSettingsDialog::LoadFromINI(settings);
-		m_game.GetCurrentAIPlayer()->SetThreads(settings.numThreads);
+		m_game.ConfigureAI(m_numThreads, m_useNeuralEval);
 	}
 
     void MainWindow::SaveGame()

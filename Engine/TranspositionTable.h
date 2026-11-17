@@ -55,9 +55,20 @@ namespace Chess
         bool Probe(uint64_t key, int depth, int alpha, int beta,
                    int& outScore, Move& outBestMove, int ply);
 
-        // Unconditional probe: returns any match regardless of depth/bound.
-        // Used by Singular Extensions for reference score retrieval.
-        bool ProbeSE(uint64_t key, int& outScore, Move& outBestMove);
+        // One entry read, delivered whole. Score, depth, bound flag and move all
+        // come from the same XOR-validated word, so a concurrent replacement
+        // between two separate probes can no longer pair one entry's move with
+        // another entry's score - which is exactly what Singular Extensions
+        // needs before it trusts a reference score. Score is mate-adjusted to
+        // the querying ply, like Probe. Returns false when the key is absent.
+        struct Snapshot
+        {
+            int score = 0;
+            int depth = 0;
+            uint8_t flag = TT_EXACT;
+            Move move{};
+        };
+        bool ProbeSnapshot(uint64_t key, int ply, Snapshot& out);
 
         // Store with in-bucket replacement
         // (key match > empty slot > stale-generation shallowest > shallowest).

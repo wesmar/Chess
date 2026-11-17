@@ -18,8 +18,8 @@ This is a case study in building a high-performance chess system using **Data-Or
 ## Key Features
 
 ### 🎯 Extreme Optimization
-- **No CRT version**: ~ 200 KB
-- **With CRT version**: ~ 500 KB
+- **No CRT version**: ~ <!--SIZE:Chess_x64_minSize.exe:kb-->303 KB<!--/SIZE-->
+- **With CRT version**: ~ <!--SIZE:Chess_x64.exe:kb-->673 KB<!--/SIZE-->
 - **Zero external dependencies** - no Qt, SDL, or .NET
 - **Portable**: Even runs in Windows Recovery Environment (WinRE)!
 
@@ -178,12 +178,12 @@ This project proves that modern C++20 can be as low-level as C while maintaining
 ### Download
 Grab the latest release from [Releases](https://github.com/wesmar/Chess/releases/download/latest/Chess.7z):
 Password: github.com
-- `Chess_x64.exe` - 64-bit version (~500 KB)
-- `Chess_x64_minSize.exe` - 64-bit minimal (~200 KB)
-- `Chess_x86.exe` - 32-bit version (~450 KB)
-- `Chess_x86_minSize.exe` - 32-bit minimal (~160 KB)
+- `Chess_x64.exe` - 64-bit version (~<!--SIZE:Chess_x64.exe:kb-->673 KB<!--/SIZE-->)
+- `Chess_x64_minSize.exe` - 64-bit minimal (~<!--SIZE:Chess_x64_minSize.exe:kb-->303 KB<!--/SIZE-->)
+- `Chess_x86.exe` - 32-bit version (~<!--SIZE:Chess_x86.exe:kb-->576 KB<!--/SIZE-->)
+- `Chess_x86_minSize.exe` - 32-bit minimal (~<!--SIZE:Chess_x86_minSize.exe:kb-->234 KB<!--/SIZE-->)
 
-Just download and run - no installation needed!
+Just download and run - no installation needed! All 8 release binaries are **digitally signed (Authenticode)** with Certum Open Source Code Signing (`Open Source Developer Marek Wesołowski`) and timestamped (`Certum Timestamp`).
 
 ### Building from Source
 
@@ -224,6 +224,7 @@ Chess/
 │   ├── Board.cpp/h           # Board representation and move execution
 │   ├── ChessConstants.h      # Core constants and enums
 │   ├── Evaluation.cpp/h      # Position evaluation with tapered PST tables
+│   ├── KPK.h                 # Exact retrograde KPK endgame tablebase (196,608 states)
 │   ├── Move.cpp/h            # Move representation (32-bit packed)
 │   ├── MoveGenerator.cpp/h   # Pseudo-legal move generation
 │   ├── MoveOrdering.cpp      # Move scoring/ordering heuristics + SEE
@@ -262,6 +263,9 @@ Chess/
 │   └── openings.pgn          # Fixed opening set for fair pairs
 ├── build_all.bat             # Build script for all configurations
 ├── build_uci.bat             # Quick build: UCI engine only, x64 Release
+├── build_x64.bat             # Quick x64 iteration build (GUI/UCI)
+├── EngineBuild.props         # Shared MSBuild compiler/linker settings
+├── find_vs.ps1               # Visual Studio / cl.exe auto-discovery
 ├── Chess.vcxproj             # Main GUI application project
 ├── ChessEngineUCI.vcxproj    # UCI console engine project
 └── Chess.slnx                # Visual Studio solution
@@ -384,7 +388,7 @@ A self-play driver (`selfplay.ps1`) ships with the engine — it spawns the UCI 
 
 - **Memory Usage**: 16-64 MB for transposition table (configurable)
 - **Startup Time**: Near-instant (<100ms)
-- **Binary Size**: 150-500 KB depending on configuration
+- **Binary Size**: <!--SIZE:Chess_x86_minSize.exe:num-->234<!--/SIZE-->-<!--SIZE:Chess_x64.exe:kb-->673 KB<!--/SIZE--> depending on configuration
 
 ### Measured Strength Progress
 
@@ -402,6 +406,7 @@ Every batch of search changes is validated with cutechess-cli matches (fixed ope
 | 3+4 | Staged move picker with lazy SEE (NPS +20%), TT in quiescence, 50-move rule in search, timeout-latch abort, endgame knowledge (mop-up, drawish scaling), O(1) occupancy restore in undo | **+35 Elo** vs batch 2 (LOS 98.7%, 410 games) |
 | 5 | Continuation history, TT generation aging, killers ply+2 clearing | **+8 Elo**; search tree −15% at equal depth |
 | 6 | Lazy SMP: persistent helper pool, whole-root search at staggered depths, TT-only coordination | **+147 Elo at 4 threads** (69.4% over 116 games, LOS 100%) |
+| 7 | Exact retrograde `KPK.h` tablebase (196,608 states, 0 W/D differences vs Syzygy across 165,676 legal positions), fail-soft alpha-beta, SEE/LMR/legal-check optimizations, O(1) piece-list undo, TT 50-move key | **+155.5 Elo** (R1 vs baseline, 95% CI +88.7..+230.2); **+49 Elo** & **1.193× NPS** (R2 vs R1) |
 
 Absolute calibration (single thread, fast TC): **~2160 Elo** on the Stockfish UCI_Elo scale — 200-game match vs SF 17 @ 2200 plus a descending ladder (holds SF 2100 at 80%). With 4 threads and the Lazy SMP gain the engine plays at roughly **~2300 on the same scale**.
 

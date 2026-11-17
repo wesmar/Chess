@@ -6,6 +6,8 @@
 #include "Board.h"
 #include <vector>
 #include <cstdint>
+#include <atomic>
+#include <memory>
 
 namespace Chess
 {
@@ -27,23 +29,33 @@ namespace Chess
     // ========== EVALUATION CACHE ==========
     // Optional cache for position evaluations to reduce redundant computation
     // Stores evaluation results keyed by Zobrist hash
-    // Thread-safe for single-threaded use; use thread_local for multi-threading
+    // Concurrent probes/stores use atomic XOR validation. Resize/Clear require idle search.
     
     struct EvalCacheEntry
     {
-        uint64_t key = 0;      // Zobrist key of cached position
-        int score = 0;         // Evaluation score for this position
-        uint8_t age = 0;       // Generation counter for cache aging
+        std::atomic<uint64_t> keyXorData{0};
+        std::atomic<uint64_t> data{0}; // generation and signed score
     };
 
     class EvalCache
     {
     public:
-        // Initialize cache to default size (disabled)
-        EvalCache() = default;
+        // Small shared cache, independent of the UCI transposition-table Hash setting.
+        // Default size in MB. One megabyte is 65536 entries of 16 bytes, which a
+        // search doing hundreds of thousands of evaluations per second recycles
+        // many times over. The cache returns exactly the value a full evaluation
+        // would have produced, so its size is a pure speed knob: the search tree
+        // is identical either way.
+        //
+        // Measured, and it is not a lever. Trees stayed identical at 4, 16 and 64
+        // MB, as expected, but so did the clock: +1.0% on two positions at depth
+        // 10 and -0.7% across 50 openings at depth 8, where the larger table's
+        // worse locality cancelled its higher hit rate. One megabyte stays.
+        static constexpr size_t DEFAULT_SIZE_MB = 1;
+        EvalCache() { Resize(DEFAULT_SIZE_MB); }
 
         // Resize cache to specified size in megabytes
-        // Size of 0 disables caching (default behavior)
+        // Size of 0 disables caching. Call only while all search threads are idle.
         void Resize(size_t sizeMB);
 
         // Attempt to retrieve cached evaluation score
@@ -60,14 +72,15 @@ namespace Chess
         void Clear();
 
         // Get current cache size in entries
-        [[nodiscard]] size_t GetSize() const noexcept { return m_table.size(); }
+        [[nodiscard]] size_t GetSize() const noexcept { return m_size; }
 
         // Check if cache is enabled (non-zero size)
-        [[nodiscard]] bool IsEnabled() const noexcept { return !m_table.empty(); }
+        [[nodiscard]] bool IsEnabled() const noexcept { return m_size != 0; }
 
     private:
-        std::vector<EvalCacheEntry> m_table;
-        uint8_t m_generation = 0;
+        std::unique_ptr<EvalCacheEntry[]> m_table;
+        size_t m_size = 0;
+        uint32_t m_generation = 1;
     };
 
     // ========== EVALUATION FUNCTIONS ==========
@@ -98,6 +111,6 @@ namespace Chess
     // ========== GLOBAL EVALUATION CACHE ==========
     // Single global cache instance for evaluation memoization
     // Can be resized/cleared via AIPlayer API methods
-    // Default state: disabled (zero size)
+    // Default size: 1 MB, shared by the main search and its helpers.
     extern EvalCache g_evalCache;
 }

@@ -16,7 +16,7 @@ namespace Chess
     int AIPlayer::WorkerAlphaBeta(Board& board, int depth, int alpha, int beta, int ply,
                                    ThreadLocalData& tld, Move excludedMove, int checkExtCount)
     {
-        m_nodesSearched.fetch_add(1, std::memory_order_relaxed);
+        CountNode();
 
         // Abort flag checked every node (cheap atomic load); clock query
         // gated to every 1024 nodes - same scheme as the main thread.
@@ -27,16 +27,12 @@ namespace Chess
             if (ShouldStop()) return 0;
         }
 
-        // Draw detection by repetition (two-fold inside the search tree)
-        if (ply > 0 && board.CountRepetitions() >= 2)
+        if (auto terminal = TerminalScore(board, ply)) return *terminal;
+        if (ply >= MAX_PLY - 1)
         {
-            return 0;
-        }
-
-        // Fifty-move rule draw (see main-thread comment)
-        if (ply > 0 && board.GetHalfMoveClock() >= 100)
-        {
-            return 0;
+            if (!board.HasLegalMove())
+                return board.IsInCheck(board.GetSideToMove()) ? -MATE_SCORE + ply : 0;
+            return board.IsInCheck(board.GetSideToMove()) ? 0 : EvaluateFor(board, tld.nnue);
         }
 
         // Mate distance pruning - don't search for mates longer than already found
@@ -49,26 +45,39 @@ namespace Chess
         if (alpha >= beta) return alpha;
 
         // Probe TT before any eval-based pruning (hit is cheaper than Evaluate).
-        uint64_t zobristKey = board.GetZobristKey();
+        uint64_t zobristKey = SearchKey(board);
         Move ttMove;
-        int ttScore = -INFINITY_SCORE;
-        if (m_transpositionTable.Probe(zobristKey, depth, alpha, beta, ttScore, ttMove, ply))
+        TranspositionTable::Snapshot tt;
+        bool ttHit = false;
+        if (!excludedMove.IsValid() && m_transpositionTable.ProbeSnapshot(zobristKey, ply, tt))
         {
-            return ttScore;
+            // The move is kept for ordering whatever the depth/bound says.
+            ttHit = true;
+            ttMove = tt.move;
+            if (tt.depth >= depth &&
+                (tt.flag == TT_EXACT ||
+                 (tt.flag == TT_ALPHA && tt.score <= alpha) ||
+                 (tt.flag == TT_BETA  && tt.score >= beta)))
+            {
+                return tt.score;
+            }
         }
 
-        if (depth == 0)
+        if (depth <= 0)
         {
             return WorkerQuiescence(board, alpha, beta, ply, 0, tld);
         }
 
         const PlayerColor sideToMove = board.GetCurrentPlayer();
         const bool sideInCheck = board.IsInCheck(sideToMove);
+        const bool pvNode = beta - alpha > 1;
+        const int phase = ComputePhase(board);
+        if (!sideInCheck && StalematePossible(board, sideToMove) && !board.HasLegalMove()) return 0;
 
         // Static evaluation shared by futility, RFP and NMP conditions.
         int staticEval = 0;
         if (!sideInCheck)
-            staticEval = Chess::Evaluate(board);
+            staticEval = EvaluateFor(board, tld.nnue);
 
         // "Improving" flag (see main-thread comment)
         static thread_local int t_evalStack[MAX_PLY + 2];
@@ -80,14 +89,11 @@ namespace Chess
                                staticEval > t_evalStack[ply - 2];
 
         // Futility + Reverse Futility Pruning (same as main thread). Fail-soft returns.
-        if (m_difficulty > 6 && depth <= 4 && !sideInCheck)
+        if (m_difficulty > 6 && !pvNode && !excludedMove.IsValid() &&
+            phase > 64 && depth <= 3 && !sideInCheck && std::abs(beta) < MATE_SCORE - 1000)
         {
-            int futilityMargin = 80 + 100 * depth;
-            if (staticEval + futilityMargin <= alpha)
-                return staticEval + futilityMargin;
-            int rfpMargin = 120 * depth;
-            if (depth <= 3 && staticEval - rfpMargin >= beta)
-                return staticEval - rfpMargin;
+            const int rfpMargin = 120 * depth;
+            if (staticEval - rfpMargin >= beta) return staticEval - rfpMargin;
         }
 
         const PlayerColor opponentColor = (sideToMove == PlayerColor::White)
@@ -96,21 +102,30 @@ namespace Chess
         // Null move pruning - disabled in endgames to avoid zugzwang errors.
         // Gated on staticEval >= beta (see main-thread comment).
         // Runs before move generation - a null-move cutoff skips it entirely.
-        int phase = ComputePhase(board);
-        if (m_difficulty > 6 && depth >= 3 && phase > 64 && !sideInCheck &&
+        bool hasNonPawn = false;
+        const auto& ownPieces = board.GetPieceList(sideToMove);
+        for (int i = 0; i < ownPieces.count; ++i)
+        {
+            auto type = board.GetPieceAt(ownPieces.squares[i]).GetType();
+            hasNonPawn |= type != PieceType::King && type != PieceType::Pawn;
+        }
+        if (m_difficulty > 6 && !pvNode && !excludedMove.IsValid() &&
+            !board.IsNullSearch() && hasNonPawn && depth >= 3 && phase > 64 && !sideInCheck &&
             staticEval >= beta)
         {
             int R = 3 + depth / 4;
             if (R > depth - 1) R = depth - 1;
 
             board.MakeNullMoveUnchecked();
-            m_transpositionTable.Prefetch(board.GetZobristKey());
+            m_transpositionTable.Prefetch(SearchKey(board));
             int score = -WorkerAlphaBeta(board, depth - 1 - R, -beta, -beta + 1, ply + 1, tld, Move{}, checkExtCount);
             board.UndoNullMove();
 
             if (score >= beta)
             {
-                return beta;  // fail-hard (see main thread comment)
+                // Fail-soft with a mate clamp (see main thread comment).
+                if (score >= MATE_SCORE - 250) score = beta;
+                return score;
             }
         }
 
@@ -118,7 +133,7 @@ namespace Chess
         const auto& pieceList = board.GetPieceList(sideToMove);
 
         // ProbCut (worker thread version)
-        if (m_difficulty > 7 && depth >= 5 && !sideInCheck &&
+        if (m_difficulty > 7 && !pvNode && !excludedMove.IsValid() && depth >= 5 && !sideInCheck &&
             std::abs(beta) < MATE_SCORE - 100)
         {
             const int PC_MARGIN = 200;
@@ -144,7 +159,7 @@ namespace Chess
                     continue;
                 }
 
-                m_transpositionTable.Prefetch(board.GetZobristKey());
+                m_transpositionTable.Prefetch(SearchKey(board));
                 int pcScore = -WorkerAlphaBeta(board, pcDepth, -rbeta, -rbeta + 1, ply + 1, tld, Move{}, checkExtCount);
                 board.UndoMove();
 
@@ -162,32 +177,55 @@ namespace Chess
             &pieceList
         );
 
-        // Internal Iterative Deepening - search to find good move ordering
-        if (m_difficulty > 6 && depth >= 6 && ttMove.GetFrom() == ttMove.GetTo())
+        // Internal Iterative Deepening - search to find good move ordering.
+        // Gated on excludedMove for the same reason as the main thread: it would
+        // otherwise run an unexcluded search of the position under verification.
+        if (m_difficulty > 6 && depth >= 6 && !excludedMove.IsValid() &&
+            ttMove.GetFrom() == ttMove.GetTo())
         {
             int iidDepth = depth - 2;
             WorkerAlphaBeta(board, iidDepth, alpha, beta, ply, tld, Move{}, checkExtCount);
-            m_transpositionTable.Probe(zobristKey, 0, alpha, beta, ttScore, ttMove, ply);
+            if (m_transpositionTable.ProbeSnapshot(zobristKey, ply, tt))
+            {
+                ttHit = true;
+                ttMove = tt.move;
+            }
         }
 
         // Singular Extensions (worker thread version — uses Chess::Evaluate reference)
+        // Same conditions as the main thread: the reference score must belong to
+        // this ttMove and come from a deep enough lower/exact bound, read as one
+        // snapshot so an SMP replacement cannot pair a move with a foreign score.
+        // Singular extensions: measured, and they cost Elo here.
+        //
+        // They were previously dead by accident - the gate tested `ttScore`
+        // while it still held the -INFINITY_SCORE it was initialised to, so the
+        // only nodes that ever reached the verification search were the ones
+        // that had just run IID. Once the gate was fixed and they fired for
+        // real, a 200-game paired match at 3+0.03 gave 79-27-94, score 0.4625,
+        // about -26 Elo (paired bootstrap 95%: -70 to +19). See
+        // testing/r4-vs-r3-summary.json.
+        //
+        // So the machinery stays, correct and reviewable, but switched off
+        // behind this flag rather than switched off by a bug. Re-enabling it is
+        // one edit; the parameters worth trying first are a higher depth floor,
+        // a tighter singularBeta margin and a shallower verification search.
+        constexpr bool ENABLE_SINGULAR_EXTENSIONS = false;
+
         bool singularExtension = false;
-        if (m_difficulty > 7 && depth >= 6 && ply > 0 &&
-            ttMove.IsValid() && !excludedMove.IsValid() &&
-            std::abs(ttScore) < MATE_SCORE - 100)
+        if (ENABLE_SINGULAR_EXTENSIONS &&
+            m_difficulty > 7 && depth >= 6 && ply > 0 &&
+            ttHit && ttMove.IsValid() && !excludedMove.IsValid() &&
+            tt.depth >= depth - 3 &&
+            (tt.flag == TT_BETA || tt.flag == TT_EXACT) &&
+            std::abs(tt.score) < MATE_SCORE - 100)
         {
-            int seTTScore = -INFINITY_SCORE;
-            Move seTTMove;
-            if (m_transpositionTable.ProbeSE(zobristKey, seTTScore, seTTMove) &&
-                std::abs(seTTScore) < MATE_SCORE - 100)
-            {
-                int singularBeta  = seTTScore - 3 * depth;
-                int singularDepth = (depth - 1) / 2;
-                int singularScore = WorkerAlphaBeta(board, singularDepth,
-                                                    singularBeta - 1, singularBeta, ply, tld, ttMove, checkExtCount);
-                if (singularScore < singularBeta)
-                    singularExtension = true;
-            }
+            int singularBeta  = tt.score - 3 * depth;
+            int singularDepth = (depth - 1) / 2;
+            int singularScore = WorkerAlphaBeta(board, singularDepth,
+                                                singularBeta - 1, singularBeta, ply, tld, ttMove, checkExtCount);
+            if (singularScore < singularBeta)
+                singularExtension = true;
         }
 
         const int sideIndex = static_cast<int>(sideToMove);
@@ -280,7 +318,7 @@ namespace Chess
             }
 
             // Prefetch the child's TT bucket before recursing
-            m_transpositionTable.Prefetch(board.GetZobristKey());
+            m_transpositionTable.Prefetch(SearchKey(board));
 
             int score;
 
@@ -303,8 +341,7 @@ namespace Chess
                 if (applyLMR)
                 {
                     // Logarithmic LMR formula
-                    lmrReduction = std::max(1, (int)(std::log((double)depth) *
-                                                     std::log((double)(moveIndex + 1)) / 2.25));
+                    lmrReduction = LateMoveReduction(depth, moveIndex);
                     if (lmrReduction >= depth) lmrReduction = depth - 1;
                 }
 
@@ -342,13 +379,14 @@ namespace Chess
                 if (isQuiet)
                 {
                     // Use depth squared to give more weight to deeper cutoffs (more reliable)
-					m_history[sideIndex][move.GetFrom()][move.GetTo()].fetch_add(depth * depth, std::memory_order_relaxed);
+                    ApplyHistoryBonus(m_history[sideIndex][move.GetFrom()][move.GetTo()], HISTORY_BONUS_SCALE * depth * depth);
 
                     // History malus for quiets searched before the cutoff move
                     for (int q = 0; q < triedQuietCount; ++q)
                     {
-                        m_history[sideIndex][triedQuiets[q].GetFrom()][triedQuiets[q].GetTo()]
-                            .fetch_sub(depth * depth, std::memory_order_relaxed);
+                        ApplyHistoryBonus(
+                            m_history[sideIndex][triedQuiets[q].GetFrom()][triedQuiets[q].GetTo()],
+                            -(HISTORY_BONUS_SCALE * depth * depth));
                     }
 
                     if (ply < MAX_PLY)
@@ -362,7 +400,7 @@ namespace Chess
                     {
                         const auto& lastRec = board.GetLastMoveRecord();
                         int prevSide = 1 - sideIndex;
-                        m_counterMoves[prevSide][lastRec.move.GetFrom()][lastRec.move.GetTo()] = move;
+                        m_counterMoves[prevSide][lastRec.move.GetFrom()][lastRec.move.GetTo()].store(move.GetRawData(), std::memory_order_relaxed);
 
                         if (!lastRec.movedPiece.IsEmpty())
                         {
@@ -371,21 +409,23 @@ namespace Chess
 
                             Piece mp = board.GetPieceAt(move.GetFrom());
                             if (!mp.IsEmpty())
-                                m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(mp), move.GetTo())]
-                                    .fetch_add(depth * depth, std::memory_order_relaxed);
+                                ApplyHistoryBonus(
+                                    m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(mp), move.GetTo())],
+                                    HISTORY_BONUS_SCALE * depth * depth);
 
                             for (int q = 0; q < triedQuietCount; ++q)
                             {
                                 Piece qp = board.GetPieceAt(triedQuiets[q].GetFrom());
                                 if (!qp.IsEmpty())
-                                    m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(qp), triedQuiets[q].GetTo())]
-                                        .fetch_sub(depth * depth, std::memory_order_relaxed);
+                                    ApplyHistoryBonus(
+                                        m_contHist[ContHistIndex(prevPc, prevTo, PieceCode(qp), triedQuiets[q].GetTo())],
+                                        -(HISTORY_BONUS_SCALE * depth * depth));
                             }
                         }
                     }
                 }
-                m_transpositionTable.Store(zobristKey, depth, beta, TT_BETA, bestMove, ply);
-                return beta;  // fail-hard (see main thread comment)
+                if (!excludedMove.IsValid()) m_transpositionTable.Store(zobristKey, depth, bestScore, TT_BETA, bestMove, ply);
+                return bestScore;  // fail-soft (see main thread comment)
             }
 
             // Record searched quiet move for potential history malus later
@@ -415,7 +455,7 @@ namespace Chess
             return sideInCheck ? (-MATE_SCORE + ply) : 0;
         }
 
-        m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove, ply);
+        if (!excludedMove.IsValid()) m_transpositionTable.Store(zobristKey, depth, bestScore, flag, bestMove, ply);
         return bestScore;
     }
 
@@ -423,22 +463,34 @@ namespace Chess
     int AIPlayer::WorkerQuiescence(Board& board, int alpha, int beta, int ply, int qDepth,
                                     ThreadLocalData& tld)
     {
-        m_nodesSearched.fetch_add(1, std::memory_order_relaxed);
+        CountNode();
 
         // Worker threads use classical evaluation for thread safety.
         // Abort flag every node, clock query gated to every 1024 nodes.
-        if (m_abortSearch.load(std::memory_order_relaxed) || qDepth >= 8)
+        if (m_abortSearch.load(std::memory_order_relaxed))
         {
-            return Chess::Evaluate(board);
+            return EvaluateFor(board, tld.nnue);
         }
         {
             static thread_local int s_timeCheckCounter = 0;
             if ((++s_timeCheckCounter & 1023) == 0 && ShouldStop())
-                return Chess::Evaluate(board);
+                return EvaluateFor(board, tld.nnue);
         }
 
+        if (auto terminal = TerminalScore(board, ply)) return *terminal;
+        const bool inCheck = board.IsInCheck(board.GetSideToMove());
+        if (!inCheck && StalematePossible(board, board.GetSideToMove()) &&
+            !board.HasLegalMove()) return 0;
+        if (ply >= MAX_PLY - 1)
+        {
+            if (inCheck && !board.HasLegalMove()) return -MATE_SCORE + ply;
+            return inCheck ? 0 : EvaluateFor(board, tld.nnue);
+        }
+        // Search evasions even after the tactical depth cap.
+        if (qDepth >= 8 && !inCheck) return EvaluateFor(board, tld.nnue);
+
         // TT probe at depth 0 (see main-thread comment)
-        uint64_t zobristKey = board.GetZobristKey();
+        uint64_t zobristKey = SearchKey(board);
         Move ttMove;
         int ttScore = -INFINITY_SCORE;
         if (m_transpositionTable.Probe(zobristKey, 0, alpha, beta, ttScore, ttMove, ply))
@@ -470,6 +522,7 @@ namespace Chess
                             (ply < MAX_PLY) ? tld.killerMoves[ply][1] : Move());
 
             int best = -INFINITY_SCORE;
+            const int evasionAlphaOrigin = alpha;
             int legalCount = 0;
 
             for (int mi = 0; PickNextMove(evasions, evasionScores.data(), mi, board); ++mi)
@@ -493,8 +546,8 @@ namespace Chess
                 if (score > best) best = score;
                 if (score >= beta)
                 {
-                    m_transpositionTable.Store(zobristKey, 0, beta, TT_BETA, move, ply);
-                    return beta;
+                    m_transpositionTable.Store(zobristKey, 0, best, TT_BETA, move, ply);
+                    return best;
                 }
                 if (score > alpha) alpha = score;
             }
@@ -504,16 +557,20 @@ namespace Chess
                 return -MATE_SCORE + ply;
             }
 
-            m_transpositionTable.Store(zobristKey, 0, alpha, TT_ALPHA, Move(), ply);
-            return alpha;
+            m_transpositionTable.Store(zobristKey, 0, best,
+                best > evasionAlphaOrigin ? TT_EXACT : TT_ALPHA, Move(), ply);
+            return best;
         }
 
         // Worker threads use classical evaluation for thread safety
-        int standPat = Chess::Evaluate(board);
+        int standPat = EvaluateFor(board, tld.nnue);
+        // Fail-soft bookkeeping, see main thread.
+        const int qAlphaOrigin = alpha;
+        int bestScore = standPat;
         if (standPat >= beta)
         {
-            m_transpositionTable.Store(zobristKey, 0, beta, TT_BETA, Move(), ply);
-            return beta;
+            m_transpositionTable.Store(zobristKey, 0, standPat, TT_BETA, Move(), ply);
+            return standPat;
         }
         if (standPat > alpha) alpha = standPat;
 
@@ -521,7 +578,7 @@ namespace Chess
         // Use queen value (900) + margin (200) for safety (accounts for promotions)
         const int QUEEN_VALUE = 900;
         const int DELTA_MARGIN = 200;
-        if (standPat + QUEEN_VALUE + DELTA_MARGIN < alpha)
+        if (ComputePhase(board) > 64 && standPat + QUEEN_VALUE + DELTA_MARGIN + 800 < alpha)
         {
             return alpha; // Position hopeless, skip tactical search
         }
@@ -566,15 +623,18 @@ namespace Chess
             int score = -WorkerQuiescence(board, -beta, -alpha, ply + 1, qDepth + 1, tld);
             board.UndoMove();
 
+            if (score > bestScore) bestScore = score;
+
             if (score >= beta)
             {
-                m_transpositionTable.Store(zobristKey, 0, beta, TT_BETA, move, ply);
-                return beta;
+                m_transpositionTable.Store(zobristKey, 0, bestScore, TT_BETA, move, ply);
+                return bestScore;
             }
             if (score > alpha) alpha = score;
         }
 
-        m_transpositionTable.Store(zobristKey, 0, alpha, TT_ALPHA, Move(), ply);
-        return alpha;
+        m_transpositionTable.Store(zobristKey, 0, bestScore,
+            bestScore > qAlphaOrigin ? TT_EXACT : TT_ALPHA, Move(), ply);
+        return bestScore;
     }
 }
